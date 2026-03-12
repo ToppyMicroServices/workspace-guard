@@ -1,7 +1,5 @@
 # HomeGuard
 
-![HomeGuard icon](./assets/homeguard-icon.svg)
-
 HomeGuard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
 
 - Path-risk evaluation for home and high-risk folders
@@ -45,8 +43,11 @@ GitHub Actions runs three workflows:
 - `Build`: `npm ci`, `npm test`, and `npm run build` on Linux, macOS, and Windows
 - `Security`: weekly and on-change `npm audit --audit-level=high`
 - `CodeQL`: weekly and on-change static analysis for JavaScript/TypeScript
+- `Release Extension`: on GitHub release publish, package a VSIX, publish to the VS Code Marketplace, and attach the VSIX to the release
 
 OS-specific checks are enabled because this project has explicit platform-aware path handling for POSIX and Windows behavior.
+
+To publish from GitHub Actions, configure the `VSCE_PAT` repository secret with a Visual Studio Marketplace personal access token for the `ToppyMicroServices` publisher.
 
 ## CLI Usage
 
@@ -129,7 +130,7 @@ Based on the current code, there is no obvious memory leak path as long as exten
 
 - Risk heuristics are intentionally conservative and regex-based for commands such as `rm -rf`, `git add -A`, and `npm publish`.
 - Settings rollback depends on the store honoring `update(key, undefined)` as an unset operation.
-- The project currently ships code and tests but no published VS Code extension package manifest.
+- Marketplace publishing depends on the `ToppyMicroServices` publisher existing in the Visual Studio Marketplace and the `VSCE_PAT` secret being configured in GitHub Actions.
 
 ## Related Docs
 

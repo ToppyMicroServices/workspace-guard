@@ -20,7 +20,7 @@ import type {
   WorkspaceSafetyAssessment,
   WorkspaceSafetyEvaluation
 } from "../core/workspaceSafety";
-import type { SettingsStore } from "../core/settingsBackup";
+import type { AppliedSettingsResult, SettingsStore } from "../core/settingsBackup";
 import { evaluatePathRisk, type SupportedPlatform } from "../core/pathPolicy";
 import { createWorkspaceSafetyGuard, type GuardedActionResult } from "./workspaceSafetyGuard";
 
@@ -312,7 +312,7 @@ export function createHomeguardCommandHandlers(
   openEscapeFolder: () => Promise<string>;
   removeHomeFoldersFromWorkspace: () => Promise<number>;
   auditTelemetry: () => TelemetryAuditReport;
-  applyPrivacyHardening: (backupDir: string) => Promise<TelemetryAuditReport & { backupPath?: string }>;
+  applyPrivacyHardening: (backupDir: string) => Promise<TelemetryAuditReport & AppliedSettingsResult>;
   rollbackPrivacyHardening: (backupPath: string) => Promise<void>;
   assessWorkspaceSafety: () => Promise<WorkspaceSafetyAssessment>;
   reviewWorkspaceSafetyAction: (request: WorkspaceSafetyActionRequest) => Promise<WorkspaceSafetyEvaluation>;

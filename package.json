@@ -1,18 +1,221 @@
 {
-  "name": "homeguard",
+  "name": "workspace-guard",
   "version": "0.1.0",
   "private": true,
+  "displayName": "HomeGuard",
+  "publisher": "ToppyMicroServices",
   "description": "Protect against accidentally opening the home directory in VS Code.",
+  "main": "./dist/src/vscodeExtension.js",
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "vscode",
+    "workspace",
+    "security",
+    "privacy",
+    "telemetry"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:homeguard.openEscapeFolder",
+    "onCommand:homeguard.removeHomeFoldersFromWorkspace",
+    "onCommand:homeguard.auditTelemetry",
+    "onCommand:homeguard.applyPrivacyHardening",
+    "onCommand:homeguard.rollbackPrivacyHardening",
+    "onCommand:homeguard.assessWorkspaceSafety"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "homeguard.openEscapeFolder",
+        "title": "Open Escape Folder",
+        "category": "HomeGuard"
+      },
+      {
+        "command": "homeguard.removeHomeFoldersFromWorkspace",
+        "title": "Remove Home Folders From Workspace",
+        "category": "HomeGuard"
+      },
+      {
+        "command": "homeguard.auditTelemetry",
+        "title": "Audit Telemetry Settings",
+        "category": "HomeGuard"
+      },
+      {
+        "command": "homeguard.applyPrivacyHardening",
+        "title": "Apply Privacy Hardening",
+        "category": "HomeGuard"
+      },
+      {
+        "command": "homeguard.rollbackPrivacyHardening",
+        "title": "Roll Back Privacy Hardening",
+        "category": "HomeGuard"
+      },
+      {
+        "command": "homeguard.assessWorkspaceSafety",
+        "title": "Assess Workspace Safety",
+        "category": "HomeGuard"
+      }
+    ],
+    "configuration": {
+      "title": "HomeGuard",
+      "properties": {
+        "homeguard.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable HomeGuard protections."
+        },
+        "homeguard.mode": {
+          "type": "string",
+          "enum": [
+            "warn",
+            "redirect",
+            "block",
+            "audit-only"
+          ],
+          "default": "redirect",
+          "description": "Response mode when the home directory is opened."
+        },
+        "homeguard.escapeFolder": {
+          "type": "string",
+          "default": "~/work/_escape",
+          "description": "Path to the Escape Folder opened when HomeGuard redirects."
+        },
+        "homeguard.enableEphemeralEscape": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use a temporary Escape Folder instead of the persistent configured path."
+        },
+        "homeguard.checkOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan workspace folders when the extension activates."
+        },
+        "homeguard.checkOnWorkspaceFolderAdd": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan newly added workspace folders."
+        },
+        "homeguard.allowList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "~/work",
+            "~/projects",
+            "~/.config/myapp"
+          ],
+          "description": "Paths allowed even when they live under the home directory."
+        },
+        "homeguard.highRiskFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "~/.ssh",
+            "~/.gnupg",
+            "~/.aws",
+            "~/.config/gcloud"
+          ],
+          "description": "Folders that should always be treated as high risk."
+        },
+        "homeguard.verbose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose HomeGuard output logging."
+        },
+        "homeguard.privacy.auditOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Audit known telemetry-related settings when the extension starts."
+        },
+        "homeguard.privacy.offerHardening": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer privacy hardening commands in the HomeGuard workflow."
+        },
+        "homeguard.privacy.backupBeforeApply": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create a settings backup before privacy hardening changes are applied."
+        },
+        "homeguard.safety.enableSaveGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable save-time workspace safety checks."
+        },
+        "homeguard.safety.enableGitGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Git-related workspace safety checks."
+        },
+        "homeguard.safety.enableTerminalGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable terminal command workspace safety checks."
+        },
+        "homeguard.safety.enableTaskGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable task execution workspace safety checks."
+        },
+        "homeguard.safety.enableDeleteGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable delete-action workspace safety checks."
+        },
+        "homeguard.safety.enablePublishGuard": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable publish-action workspace safety checks."
+        },
+        "homeguard.safety.requireConfirmationForDestructiveActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require confirmation before destructive actions in risky workspaces."
+        },
+        "homeguard.safety.blockHighRiskPublish": {
+          "type": "boolean",
+          "default": true,
+          "description": "Block publish actions in high-risk workspaces."
+        }
+      }
+    }
+  },
   "bin": {
     "homeguard-code": "dist/src/cli.js",
     "workspace-guard-scan": "dist/src/githubScanCli.js"
   },
+  "files": [
+    "dist/src/**",
+    "README.md",
+    "assets/homeguard-icon.svg"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "vscode:prepublish": "npm run build",
+    "package:extension": "vsce package",
+    "publish:extension": "vsce publish"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ToppyMicroServices/workspace-guard.git"
+  },
+  "homepage": "https://github.com/ToppyMicroServices/workspace-guard#readme",
+  "bugs": {
+    "url": "https://github.com/ToppyMicroServices/workspace-guard/issues"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^3.7.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
