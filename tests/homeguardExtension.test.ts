@@ -159,19 +159,24 @@ describe("activateHomeguardExtension", () => {
   });
 
   it("detects home folders added to a multi-root workspace", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-ext-"));
+    tempDirs.push(sandbox);
+    const homeDir = path.join(sandbox, "home");
     const { host, emitChange, removedFolders } = await createHost({
-      workspaceFolders: [{ uri: { fsPath: "/Users/akira/work/projectA" } }]
+      homeDir,
+      env: { HOME: homeDir },
+      workspaceFolders: [{ uri: { fsPath: path.join(homeDir, "work", "projectA") } }]
     });
 
     const activation = await activateHomeguardExtension(host, {
       mode: "block"
     });
     await emitChange({
-      added: [{ uri: { fsPath: "/Users/akira" } }],
+      added: [{ uri: { fsPath: homeDir } }],
       removed: []
     });
 
-    expect(removedFolders).toContain("/Users/akira");
+    expect(removedFolders).toContain(homeDir);
     activation.dispose();
   });
 
