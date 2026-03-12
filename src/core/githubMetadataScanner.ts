@@ -40,6 +40,7 @@ export interface GithubMetadataScanResult {
 
 type YamlObject = Record<string, unknown>;
 type GithubPermissions = Record<string, unknown>;
+type TaintedExpressionMap = Map<string, string>;
 
 interface WorkflowTriggerSummary {
   names: Set<string>;
@@ -99,7 +100,7 @@ const DANGEROUS_RUN_PATTERNS = [
 const SECRET_ECHO_PATTERN = /\b(echo|printf)\b.+\${{\s*secrets\.[^}]+}}/i;
 const TEMPLATE_SECRET_REQUEST_PATTERN = /\b(paste|attach|share|send|provide|include)\b.+\b(token|secret|password|credential|api[ -]?key|ssh key|private key|cookie)\b/i;
 const TEMPLATE_COMMAND_PATTERN = /\b(curl|wget)\b.+\|\s*(bash|sh)\b|\bsudo\b|\bchmod\s+\+x\b/i;
-const USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs|inputs\.)/i;
+const DIRECT_USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs)/i;
 const EXECUTION_SINK_KEYS = new Set(["script", "command", "args", "entrypoint", "ref", "repository"]);
 
 function toRelativePath(rootPath: string, filePath: string): string {
@@ -199,15 +200,71 @@ function mergeTaintedEnv(...maps: TaintedEnvMap[]): TaintedEnvMap {
   return merged;
 }
 
-function collectTaintedEnv(env: unknown): TaintedEnvMap {
+function mergeTaintedExpressions(...maps: TaintedExpressionMap[]): TaintedExpressionMap {
+  const merged = new Map<string, string>();
+  for (const map of maps) {
+    for (const [key, value] of map.entries()) {
+      merged.set(key, value);
+    }
+  }
+
+  return merged;
+}
+
+function buildExpressionReferencePattern(expressionPath: string): RegExp {
+  const escapedExpressionPath = expressionPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\$\\{\\{\\s*${escapedExpressionPath}\\s*\\}\\}`, "i");
+}
+
+function findTaintedExpressionReference(
+  value: string,
+  taintedExpressions: TaintedExpressionMap
+): [string, string] | undefined {
+  if (DIRECT_USER_CONTROLLED_EXPRESSION_PATTERN.test(value)) {
+    return ["github.event", value];
+  }
+
+  for (const [expressionPath, source] of taintedExpressions.entries()) {
+    if (buildExpressionReferencePattern(expressionPath).test(value)) {
+      return [expressionPath, source];
+    }
+  }
+
+  return undefined;
+}
+
+function collectWorkflowInputTaints(context: WorkflowContext): TaintedExpressionMap {
+  const tainted = new Map<string, string>();
+  if (!context.triggers.names.has("workflow_dispatch")) {
+    return tainted;
+  }
+
+  const triggerConfig = isObject(context.data.on) ? context.data.on.workflow_dispatch : undefined;
+  if (!isObject(triggerConfig) || !isObject(triggerConfig.inputs)) {
+    return tainted;
+  }
+
+  for (const inputName of Object.keys(triggerConfig.inputs)) {
+    tainted.set(`inputs.${inputName}`, `workflow_dispatch input ${inputName}`);
+  }
+
+  return tainted;
+}
+
+function collectTaintedEnv(env: unknown, taintedExpressions: TaintedExpressionMap): TaintedEnvMap {
   const tainted = new Map<string, string>();
   if (!isObject(env)) {
     return tainted;
   }
 
   for (const [key, value] of Object.entries(env)) {
-    if (typeof value === "string" && USER_CONTROLLED_EXPRESSION_PATTERN.test(value)) {
-      tainted.set(key, value);
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const taintedReference = findTaintedExpressionReference(value, taintedExpressions);
+    if (taintedReference) {
+      tainted.set(key, taintedReference[1]);
     }
   }
 
@@ -224,6 +281,65 @@ function findReferencedTaintedEnv(runValue: string, taintedEnv: TaintedEnvMap): 
   }
 
   return undefined;
+}
+
+function collectTaintedWithInputs(
+  withValue: unknown,
+  taintedExpressions: TaintedExpressionMap
+): TaintedExpressionMap {
+  const tainted = new Map<string, string>();
+  if (!isObject(withValue)) {
+    return tainted;
+  }
+
+  for (const [key, value] of Object.entries(withValue)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const taintedReference = findTaintedExpressionReference(value, taintedExpressions);
+    if (taintedReference) {
+      tainted.set(`inputs.${key}`, taintedReference[1]);
+    }
+  }
+
+  return tainted;
+}
+
+function extractTaintedFileCommandAssignments(
+  runValue: string,
+  targetVariableName: "GITHUB_ENV" | "GITHUB_OUTPUT",
+  taintedExpressions: TaintedExpressionMap,
+  taintedEnv: TaintedEnvMap
+): Map<string, string> {
+  const assignments = new Map<string, string>();
+
+  for (const line of runValue.split(/\r?\n/)) {
+    if (!new RegExp(`\\b${targetVariableName}\\b`).test(line)) {
+      continue;
+    }
+
+    const quotedAssignment = line.match(/["']([A-Za-z_][A-Za-z0-9_-]*)=(.+?)["']/);
+    const plainAssignment = line.match(/\b([A-Za-z_][A-Za-z0-9_-]*)=([^>\n|]+)(?:>>|\|\s*tee\b)/);
+    const assignment = quotedAssignment ?? plainAssignment;
+    if (!assignment) {
+      continue;
+    }
+
+    const [, key, rawValue] = assignment;
+    const taintedExpression = findTaintedExpressionReference(rawValue, taintedExpressions);
+    if (taintedExpression) {
+      assignments.set(key, taintedExpression[1]);
+      continue;
+    }
+
+    const taintedEnvReference = findReferencedTaintedEnv(rawValue, taintedEnv);
+    if (taintedEnvReference) {
+      assignments.set(key, taintedEnvReference[1]);
+    }
+  }
+
+  return assignments;
 }
 
 function normalizeWorkflowTriggers(value: unknown): WorkflowTriggerSummary {
@@ -428,7 +544,8 @@ function scanActionReference(
 function scanRunBlock(
   context: WorkflowContext,
   runValue: string,
-  taintedEnv: TaintedEnvMap
+  taintedEnv: TaintedEnvMap,
+  taintedExpressions: TaintedExpressionMap
 ): GithubMetadataFinding[] {
   const findings: GithubMetadataFinding[] = [];
   const lineNumber = findLineNumber(context.lines, runValue) ?? findLineNumber(context.lines, /^\s*run\s*:/i);
@@ -477,15 +594,16 @@ function scanRunBlock(
     }));
   }
 
-  if (USER_CONTROLLED_EXPRESSION_PATTERN.test(runValue)) {
+  const taintedExpressionReference = findTaintedExpressionReference(runValue, taintedExpressions);
+  if (taintedExpressionReference) {
     findings.push(createFinding(context.file, lineNumber, {
       id: "WG-GHWF-011",
       severity: "high",
       category: "workflow-command",
-      reason: "workflow shell command interpolates potentially attacker-controlled GitHub context",
-      evidence: runValue.trim(),
-      message: "Workflow step interpolates user-controlled GitHub context into shell execution.",
-      suggestedAction: "Avoid direct shell interpolation of event fields; pass values through validated inputs or quoted environment bindings.",
+      reason: "workflow shell command interpolates tainted workflow expression",
+      evidence: taintedExpressionReference[1],
+      message: "Workflow step interpolates a tainted workflow expression into shell execution.",
+      suggestedAction: "Avoid direct shell interpolation of untrusted expressions; pass values through validated inputs or quoted environment bindings.",
       confidence: "medium"
     }));
   }
@@ -510,7 +628,8 @@ function scanRunBlock(
 function scanWithBlock(
   context: WorkflowContext,
   usesReference: string | undefined,
-  withValue: unknown
+  withValue: unknown,
+  taintedExpressions: TaintedExpressionMap
 ): GithubMetadataFinding[] {
   if (!isObject(withValue)) {
     return [];
@@ -519,11 +638,16 @@ function scanWithBlock(
   const findings: GithubMetadataFinding[] = [];
 
   for (const [key, value] of Object.entries(withValue)) {
-    if (typeof value !== "string" || !USER_CONTROLLED_EXPRESSION_PATTERN.test(value)) {
+    if (typeof value !== "string") {
       continue;
     }
 
     if (!EXECUTION_SINK_KEYS.has(key)) {
+      continue;
+    }
+
+    const taintedReference = findTaintedExpressionReference(value, taintedExpressions);
+    if (!taintedReference) {
       continue;
     }
 
@@ -532,9 +656,9 @@ function scanWithBlock(
       severity: key === "script" || key === "command" || key === "entrypoint" ? "high" : "medium",
       category: "workflow-expression",
       reason: `${key} receives a user-controlled GitHub expression`,
-      evidence: value,
-      message: `${usesReference ?? "Workflow step"} passes user-controlled GitHub context into ${key}.`,
-      suggestedAction: `Avoid feeding attacker-controlled expressions into ${key}; validate values before passing them into execution-sensitive inputs.`,
+      evidence: taintedReference[1],
+      message: `${usesReference ?? "Workflow step"} passes a tainted workflow expression into ${key}.`,
+      suggestedAction: `Avoid feeding tainted expressions into ${key}; validate values before passing them into execution-sensitive inputs.`,
       confidence: "medium"
     }));
   }
@@ -600,12 +724,35 @@ function scanTriggerSurface(context: WorkflowContext): GithubMetadataFinding[] {
   return findings;
 }
 
-function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[] {
+function normalizeLocalReusableWorkflowPath(fileReference: string): string | undefined {
+  if (!fileReference.startsWith("./")) {
+    return undefined;
+  }
+
+  const normalizedPath = path.posix.normalize(fileReference.slice(2));
+  if (!WORKFLOW_FILE_PATTERN.test(normalizedPath)) {
+    return undefined;
+  }
+
+  return normalizedPath;
+}
+
+function scanWorkflowFile(
+  file: string,
+  content: string,
+  workflowContents: ReadonlyMap<string, string>,
+  seedTaintedExpressions: TaintedExpressionMap = new Map(),
+  activeWorkflowStack: ReadonlySet<string> = new Set()
+): GithubMetadataFinding[] {
   const parseFindings = collectWorkflowParseFindings(file, content);
   const context = buildWorkflowContext(file, content);
   const findings: GithubMetadataFinding[] = [...parseFindings, ...scanTriggerSurface(context)];
   const workflowPermissions = context.data.permissions;
-  const workflowTaintedEnv = collectTaintedEnv(context.data.env);
+  const workflowTaintedExpressions = mergeTaintedExpressions(
+    collectWorkflowInputTaints(context),
+    seedTaintedExpressions
+  );
+  let workflowTaintedEnv = collectTaintedEnv(context.data.env, workflowTaintedExpressions);
   const jobs = isObject(context.data.jobs) ? context.data.jobs : {};
   const workflowActionReferences: string[] = [];
   const hasCheckoutStep = context.lines.some((line) => /uses:\s*actions\/checkout@/i.test(line));
@@ -642,10 +789,29 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
     }
 
     const jobUses = asString(jobValue.uses);
-    const jobTaintedEnv = mergeTaintedEnv(workflowTaintedEnv, collectTaintedEnv(jobValue.env));
+    let jobTaintedEnv = mergeTaintedEnv(workflowTaintedEnv, collectTaintedEnv(jobValue.env, workflowTaintedExpressions));
     if (jobUses) {
       findings.push(...scanActionReference(context, jobUses, jobUses));
-      findings.push(...scanWithBlock(context, jobUses, jobValue.with));
+      findings.push(...scanWithBlock(context, jobUses, jobValue.with, workflowTaintedExpressions));
+
+      const localReusableWorkflowPath = normalizeLocalReusableWorkflowPath(jobUses);
+      if (localReusableWorkflowPath) {
+        const calleeContent = workflowContents.get(localReusableWorkflowPath);
+        const calleeSeedTaints = collectTaintedWithInputs(jobValue.with, workflowTaintedExpressions);
+        if (
+          calleeContent
+          && calleeSeedTaints.size > 0
+          && !activeWorkflowStack.has(localReusableWorkflowPath)
+        ) {
+          findings.push(...scanWorkflowFile(
+            localReusableWorkflowPath,
+            calleeContent,
+            workflowContents,
+            calleeSeedTaints,
+            new Set([...activeWorkflowStack, file])
+          ));
+        }
+      }
     }
 
     if (jobValue.secrets === "inherit") {
@@ -688,10 +854,10 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
       }
 
       const stepUses = asString(step.uses);
-      const stepTaintedEnv = mergeTaintedEnv(jobTaintedEnv, collectTaintedEnv(step.env));
+      let stepTaintedEnv = mergeTaintedEnv(jobTaintedEnv, collectTaintedEnv(step.env, workflowTaintedExpressions));
       if (stepUses) {
         findings.push(...scanActionReference(context, stepUses, stepUses));
-        findings.push(...scanWithBlock(context, stepUses, step.with));
+        findings.push(...scanWithBlock(context, stepUses, step.with, workflowTaintedExpressions));
 
         if (/^actions\/checkout@/i.test(stepUses)) {
           const stepWith = isObject(step.with) ? step.with : {};
@@ -708,9 +874,36 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
 
       const runValue = asString(step.run);
       if (runValue) {
-        findings.push(...scanRunBlock(context, runValue, stepTaintedEnv));
+        findings.push(...scanRunBlock(context, runValue, stepTaintedEnv, workflowTaintedExpressions));
         if (/github\.event\.pull_request\.head\./.test(runValue)) {
           pullRequestTargetChecksOutHead = true;
+        }
+
+        const taintedEnvAssignments = extractTaintedFileCommandAssignments(
+          runValue,
+          "GITHUB_ENV",
+          workflowTaintedExpressions,
+          stepTaintedEnv
+        );
+        if (taintedEnvAssignments.size > 0) {
+          jobTaintedEnv = mergeTaintedEnv(jobTaintedEnv, taintedEnvAssignments);
+          workflowTaintedEnv = mergeTaintedEnv(workflowTaintedEnv, taintedEnvAssignments);
+          stepTaintedEnv = mergeTaintedEnv(stepTaintedEnv, taintedEnvAssignments);
+        }
+
+        const stepId = asString(step.id);
+        if (stepId) {
+          const taintedOutputAssignments = extractTaintedFileCommandAssignments(
+            runValue,
+            "GITHUB_OUTPUT",
+            workflowTaintedExpressions,
+            stepTaintedEnv
+          );
+          if (taintedOutputAssignments.size > 0) {
+            for (const [outputName, source] of taintedOutputAssignments.entries()) {
+              workflowTaintedExpressions.set(`steps.${stepId}.outputs.${outputName}`, source);
+            }
+          }
         }
       }
     }
@@ -835,13 +1028,23 @@ export async function scanGithubMetadata(
   const githubFiles = await walkDirectory(fileSystem, path.join(rootPath, ".github"));
   const scannedFiles = githubFiles.map((filePath) => toRelativePath(rootPath, filePath)).sort();
   const findings: GithubMetadataFinding[] = [];
+  const workflowContents = new Map<string, string>();
 
   for (const filePath of githubFiles) {
     const relativeFilePath = toRelativePath(rootPath, filePath);
-    const content = await fileSystem.readFile(filePath, "utf8");
+    if (!WORKFLOW_FILE_PATTERN.test(relativeFilePath)) {
+      continue;
+    }
+
+    workflowContents.set(relativeFilePath, await fileSystem.readFile(filePath, "utf8"));
+  }
+
+  for (const filePath of githubFiles) {
+    const relativeFilePath = toRelativePath(rootPath, filePath);
+    const content = workflowContents.get(relativeFilePath) ?? await fileSystem.readFile(filePath, "utf8");
 
     if (WORKFLOW_FILE_PATTERN.test(relativeFilePath)) {
-      findings.push(...scanWorkflowFile(relativeFilePath, content));
+      findings.push(...scanWorkflowFile(relativeFilePath, content, workflowContents));
       continue;
     }
 
@@ -871,7 +1074,13 @@ export async function scanGithubMetadata(
   return {
     rootPath,
     scannedFiles,
-    findings
+    findings: findings.filter((finding, index, allFindings) => allFindings.findIndex((candidate) => (
+      candidate.id === finding.id
+      && candidate.file === finding.file
+      && candidate.line === finding.line
+      && candidate.evidence === finding.evidence
+      && candidate.message === finding.message
+    )) === index)
   };
 }
 

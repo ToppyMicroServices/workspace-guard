@@ -238,6 +238,33 @@ jobs:
     ]));
   });
 
+  it("tracks tainted values propagated through GITHUB_OUTPUT into later steps", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/tainted-output.yml", `name: tainted output
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  suspicious:
+    runs-on: ubuntu-latest
+    steps:
+      - id: prepare
+        run: echo "payload=\${{ github.event.pull_request.title }}" >> "$GITHUB_OUTPUT"
+      - run: bash -c "\${{ steps.prepare.outputs.payload }}"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-011",
+        file: ".github/workflows/tainted-output.yml"
+      })
+    ]));
+  });
+
   it("flags user-controlled expressions passed into action inputs", async () => {
     const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
     tempDirs.push(rootPath);
@@ -309,5 +336,84 @@ jobs:
         file: ".github/workflows/reusable.yml"
       })
     ]));
+  });
+
+  it("propagates tainted caller inputs into local reusable workflow sinks", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/caller.yml", `name: caller
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  delegate:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      script_body: \${{ github.event.pull_request.body }}
+`);
+    await writeRepoFile(rootPath, ".github/workflows/reusable.yml", `name: reusable
+on:
+  workflow_call:
+    inputs:
+      script_body:
+        required: true
+        type: string
+jobs:
+  dangerous:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: bash -c "\${{ inputs.script_body }}"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-011",
+        file: ".github/workflows/reusable.yml"
+      })
+    ]));
+  });
+
+  it("does not flag local reusable workflow inputs when caller passes safe constants", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/caller.yml", `name: caller
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  delegate:
+    uses: ./.github/workflows/reusable.yml
+    with:
+      script_body: echo safe
+`);
+    await writeRepoFile(rootPath, ".github/workflows/reusable.yml", `name: reusable
+on:
+  workflow_call:
+    inputs:
+      script_body:
+        required: true
+        type: string
+jobs:
+  safe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: printf '%s\\n' "\${{ inputs.script_body }}"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const reusableWorkflowInputFindings = result.findings.filter((finding) => (
+      finding.file === ".github/workflows/reusable.yml"
+      && ["WG-GHWF-011", "WG-GHWF-018", "WG-GHWF-019"].includes(finding.id)
+    ));
+
+    expect(reusableWorkflowInputFindings).toEqual([]);
   });
 });
