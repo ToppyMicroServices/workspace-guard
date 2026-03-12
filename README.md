@@ -6,6 +6,7 @@ HomeGuard is a TypeScript library and CLI for reducing the risk of opening your 
 
 - Path-risk evaluation for home and high-risk folders
 - A `homeguard-code` wrapper around the `code` CLI
+- A `.github` scanner for GitHub workflow and repository-metadata risks
 - Extension-host helpers for workspace detection and guarded actions
 - Telemetry hardening helpers with rollback support
 
@@ -64,6 +65,22 @@ Core CLI behaviors:
 - High-risk folders warn without rewriting the target
 - Redirect mode creates the escape folder before spawning VS Code
 
+## GitHub Metadata Scan
+
+Use the scanner to review high-risk repository metadata before enabling Actions or trusting repository automation:
+
+```bash
+npm run build
+npx workspace-guard-scan .
+```
+
+Current `.github` rules cover:
+
+- `.github/workflows/*.yml`: `pull_request_target`, broad `permissions`, unpinned `uses`, dangerous `run`, `self-hosted`, and PR-head checkout in privileged workflows
+- `.github/dependabot.yml`: `insecure-external-code-execution: allow`
+- `.github/CODEOWNERS`: repository-wide catch-all review routing entries
+- `.github/ISSUE_TEMPLATE/*` and `PULL_REQUEST_TEMPLATE*`: secret requests and risky shell instructions
+
 ## Library Entry Points
 
 The package re-exports the main APIs from `src/index.ts`.
@@ -71,6 +88,7 @@ The package re-exports the main APIs from `src/index.ts`.
 Useful entry points:
 
 - `evaluatePathRisk`
+- `scanGithubMetadata`
 - `buildCliExecutionPlan`
 - `runHomeguardCode`
 - `activateHomeguardExtension`

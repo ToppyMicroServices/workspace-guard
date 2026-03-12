@@ -40,6 +40,7 @@ HomeGuard は、VS Code において `$HOME` 直下全体を workspace として
 * VS Code 利用時の privacy hardening を容易にする。
 * telemetry 設定の監査と一括適用を支援する。
 * 社内利用時の軽量なポリシー実装の土台を提供する。
+* `.github/` 配下の automation / review routing / social engineering risk を push 前に監査する。
 
 ---
 

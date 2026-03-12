@@ -4,7 +4,8 @@
   "private": true,
   "description": "Protect against accidentally opening the home directory in VS Code.",
   "bin": {
-    "homeguard-code": "dist/cli.js"
+    "homeguard-code": "dist/src/cli.js",
+    "workspace-guard-scan": "dist/src/githubScanCli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
