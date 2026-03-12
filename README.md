@@ -37,6 +37,16 @@ npm run build
 npm test
 ```
 
+## CI
+
+GitHub Actions runs three workflows:
+
+- `Build`: `npm ci`, `npm test`, and `npm run build` on Linux, macOS, and Windows
+- `Security`: weekly and on-change `npm audit --audit-level=high`
+- `CodeQL`: weekly and on-change static analysis for JavaScript/TypeScript
+
+OS-specific checks are enabled because this project has explicit platform-aware path handling for POSIX and Windows behavior.
+
 ## CLI Usage
 
 `src/cli.ts` currently starts the wrapper in `redirect` mode.
