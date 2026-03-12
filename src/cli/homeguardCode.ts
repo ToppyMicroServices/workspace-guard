@@ -1,13 +1,14 @@
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
+import { DEFAULT_ESCAPE_FOLDER, type HomeguardMode } from "../core/config";
+import { ensureEscapeFolder, resolveEscapeFolderPath } from "../core/escapeFolder";
 import { evaluatePathRisk, expandPathInput, type SupportedPlatform } from "../core/pathPolicy";
-
-export type HomeguardMode = "warn" | "redirect" | "block" | "audit-only";
 
 export interface HomeguardCliOptions {
   mode: HomeguardMode;
   escapeFolder?: string;
+  enableEphemeralEscape?: boolean;
   allowList?: string[];
   highRiskFolders?: string[];
   cwd?: string;
@@ -15,7 +16,9 @@ export interface HomeguardCliOptions {
   homeDir?: string;
   platform?: SupportedPlatform;
   codeCommand?: string;
+  now?: () => Date;
   realpath?: (candidate: string) => Promise<string>;
+  ensureEscapeFolder?: typeof ensureEscapeFolder;
 }
 
 export interface CliTargetAnalysis {
@@ -24,6 +27,7 @@ export interface CliTargetAnalysis {
   displayValue: string;
   normalizedTarget: string;
   isHomePath: boolean;
+  isHighRiskPath: boolean;
 }
 
 export interface CliExecutionPlan {
@@ -31,6 +35,7 @@ export interface CliExecutionPlan {
   shouldWarn: boolean;
   shouldBlock: boolean;
   shouldRedirect: boolean;
+  redirectTimestamp?: string;
   command: string;
   args: string[];
   exitCode: number;
@@ -39,19 +44,22 @@ export interface CliExecutionPlan {
 }
 
 function getDefaultOptions(options: HomeguardCliOptions): Required<
-  Omit<HomeguardCliOptions, "realpath" | "escapeFolder" | "allowList" | "highRiskFolders">
-> & Pick<HomeguardCliOptions, "realpath" | "escapeFolder" | "allowList" | "highRiskFolders"> {
+  Omit<HomeguardCliOptions, "realpath" | "escapeFolder" | "allowList" | "highRiskFolders" | "ensureEscapeFolder">
+> & Pick<HomeguardCliOptions, "realpath" | "escapeFolder" | "allowList" | "highRiskFolders" | "ensureEscapeFolder"> {
   return {
     mode: options.mode,
     allowList: options.allowList ?? [],
     highRiskFolders: options.highRiskFolders ?? [],
+    enableEphemeralEscape: options.enableEphemeralEscape ?? false,
     cwd: options.cwd ?? process.cwd(),
     env: options.env ?? process.env,
     homeDir: options.homeDir ?? homedir(),
     platform: options.platform ?? process.platform,
     codeCommand: options.codeCommand ?? "code",
-    escapeFolder: options.escapeFolder,
-    realpath: options.realpath
+    now: options.now ?? (() => new Date()),
+    escapeFolder: options.escapeFolder ?? DEFAULT_ESCAPE_FOLDER,
+    realpath: options.realpath,
+    ensureEscapeFolder: options.ensureEscapeFolder
   };
 }
 
@@ -98,6 +106,10 @@ function buildWarningMessages(
     warnings.push(`Current target resolves to: ${analysis.normalizedTarget}`);
   }
 
+  for (const analysis of analyses.filter((entry) => entry.isHighRiskPath && !entry.isHomePath)) {
+    warnings.push(`Warning: opening a high-risk folder may expose secrets: ${analysis.normalizedTarget}`);
+  }
+
   if (mode === "redirect" && redirectTarget) {
     warnings.push("Consider opening a project subdirectory instead.");
     warnings.push(`Redirecting to: ${redirectTarget}`);
@@ -131,7 +143,9 @@ export async function buildCliExecutionPlan(
     });
 
     if (!risk.isHomePath) {
-      continue;
+      if (!risk.isHighRiskPath) {
+        continue;
+      }
     }
 
     analyses.push({
@@ -139,7 +153,8 @@ export async function buildCliExecutionPlan(
       rawValue,
       displayValue: rawValue,
       normalizedTarget: risk.normalized.realPath,
-      isHomePath: true
+      isHomePath: risk.isHomePath,
+      isHighRiskPath: risk.isHighRiskPath
     });
   }
 
@@ -149,6 +164,7 @@ export async function buildCliExecutionPlan(
       shouldWarn: false,
       shouldBlock: false,
       shouldRedirect: false,
+      redirectTimestamp: undefined,
       command: resolvedOptions.codeCommand,
       args: [...argv],
       exitCode: 0,
@@ -157,15 +173,27 @@ export async function buildCliExecutionPlan(
     };
   }
 
-  const redirectTarget = resolvedOptions.escapeFolder
-    ? expandPathInput(resolvedOptions.escapeFolder, resolvedOptions)
+  const redirectTimestamp = resolvedOptions.enableEphemeralEscape
+    ? resolvedOptions.now().toISOString()
     : undefined;
+  const redirectTarget = resolveEscapeFolderPath({
+    escapeFolder: resolvedOptions.escapeFolder,
+    enableEphemeralEscape: resolvedOptions.enableEphemeralEscape,
+    env: resolvedOptions.env,
+    homeDir: resolvedOptions.homeDir,
+    platform: resolvedOptions.platform,
+    timestamp: redirectTimestamp
+  });
   const args = [...argv];
-  const shouldRedirect = resolvedOptions.mode === "redirect" && Boolean(redirectTarget);
+  const shouldRedirect = resolvedOptions.mode === "redirect"
+    && analyses.some((analysis) => analysis.isHomePath)
+    && Boolean(redirectTarget);
 
   if (shouldRedirect && redirectTarget) {
     for (const analysis of analyses) {
-      args[analysis.argIndex] = redirectTarget;
+      if (analysis.isHomePath) {
+        args[analysis.argIndex] = redirectTarget;
+      }
     }
   }
 
@@ -175,11 +203,16 @@ export async function buildCliExecutionPlan(
     shouldWarn: true,
     shouldBlock,
     shouldRedirect,
+    redirectTimestamp,
     command: resolvedOptions.codeCommand,
     args,
     exitCode: shouldBlock ? 2 : 0,
     analyses,
-    warnings: buildWarningMessages(analyses, resolvedOptions.mode, redirectTarget)
+    warnings: buildWarningMessages(
+      analyses,
+      resolvedOptions.mode,
+      shouldRedirect ? redirectTarget : undefined
+    )
   };
 }
 
@@ -192,6 +225,7 @@ export async function runHomeguardCode(
   } = {}
 ): Promise<number> {
   const plan = await buildCliExecutionPlan(argv, options);
+  const resolvedOptions = getDefaultOptions(options);
 
   if (plan.warnings.length > 0) {
     const stderr = io.stderr ?? process.stderr;
@@ -200,6 +234,17 @@ export async function runHomeguardCode(
 
   if (plan.shouldBlock) {
     return plan.exitCode;
+  }
+
+  if (plan.shouldRedirect) {
+    await (resolvedOptions.ensureEscapeFolder ?? ensureEscapeFolder)({
+      escapeFolder: resolvedOptions.escapeFolder,
+      enableEphemeralEscape: resolvedOptions.enableEphemeralEscape,
+      env: resolvedOptions.env,
+      homeDir: resolvedOptions.homeDir,
+      platform: resolvedOptions.platform,
+      timestamp: plan.redirectTimestamp
+    });
   }
 
   const spawnCommand = io.spawnCommand ?? spawn;

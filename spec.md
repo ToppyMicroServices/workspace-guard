@@ -4,6 +4,8 @@
 
 HomeGuard は、VS Code において `$HOME` 直下全体を workspace として開くことに起因する情報露出、誤操作、拡張機能による過剰走査、不要な外部送信のリスクを低減するための軽量セキュリティ支援ツールである。
 
+ただし、実害の観点では情報露出だけでなく、破壊的削除、誤コミット、誤公開、誤実行のほうが深刻になりうる。したがって本仕様は、`open` を入口としつつ、将来的には workspace 全体に対する危険操作ガードへ拡張する前提を持つ。
+
 本ツールは次の 2 系統で構成する。
 
 1. **CLI ラッパー**
@@ -69,7 +71,18 @@ HomeGuard は、VS Code において `$HOME` 直下全体を workspace として
 * ターミナルの `rm`, `mv`, `chmod` の対象範囲拡大
 * 他 repo への機密ファイル混入
 
-### 3.3 拡張機能・通信リスク
+### 3.3 破壊・公開リスク
+
+以下は情報露出よりも優先して抑止すべき対象である。
+
+* explorer / search / refactor からの大量削除
+* save に伴う formatter / code action / organize imports の広範囲適用
+* Git の `add`, `commit`, `push`, `publish` による誤公開
+* task / debug / extension command / terminal からの破壊的スクリプト実行
+* package publish や container / cloud deploy の誤起動
+* AI 補助や自動化による意図しない一括変更
+
+### 3.4 拡張機能・通信リスク
 
 * telemetry
 * usage report
@@ -91,7 +104,8 @@ HomeGuard は、VS Code において `$HOME` 直下全体を workspace として
    * 強制設定変更は管理モードに限定する。
 4. **監査 → 提案 → 明示適用を基本とする。**
 5. **CLI と GUI の両入口を塞ぐ。**
-6. **小さい実装で高い実効性を狙う。**
+6. **危険操作は実行直前で止める。**
+7. **小さい実装で高い実効性を狙う。**
 
 ---
 
@@ -123,6 +137,7 @@ HomeGuard は、VS Code において `$HOME` 直下全体を workspace として
 * workspace からの除去
 * Escape Folder / Safe Folder の提示
 * telemetry audit と privacy hardening
+* save / task / terminal / git / publish 前後の安全チェック
 
 ### C. 設定ストア
 
@@ -188,6 +203,15 @@ code .
 * 変更候補を一覧表示
 * one-click で適用
 * rollback 可能
+
+### 6.6 Workspace Safety Guard
+
+期待動作:
+
+* 危険な workspace では save, task, terminal, git, delete, publish を追加監視対象にする
+* 実行前に risk summary と safer alternative を提示する
+* policy に応じて warn / require confirmation / block を切り替える
+* workspace trust とは別に、HomeGuard 独自の safety judgement を持つ
 
 ---
 
@@ -516,6 +540,14 @@ Open a subdirectory or use the Escape Folder instead.
     "~/.aws",
     "~/.config/gcloud"
   ],
+  "homeGuard.safety.enableSaveGuard": true,
+  "homeGuard.safety.enableGitGuard": true,
+  "homeGuard.safety.enableTerminalGuard": true,
+  "homeGuard.safety.enableTaskGuard": true,
+  "homeGuard.safety.enableDeleteGuard": true,
+  "homeGuard.safety.enablePublishGuard": true,
+  "homeGuard.safety.requireConfirmationForDestructiveActions": true,
+  "homeGuard.safety.blockHighRiskPublish": true,
   "homeGuard.privacy.auditOnStartup": false,
   "homeGuard.privacy.offerHardening": true,
   "homeGuard.privacy.knownTelemetryProfile": "default",
@@ -559,6 +591,8 @@ Open a subdirectory or use the Escape Folder instead.
 5. settings 書換時はバックアップを取る。
 6. rollback を提供する。
 7. Escape Folder 作成時に過度な権限変更を行わない。
+8. 破壊的操作や公開操作は、可能な限り実行直前に再判定する。
+9. terminal / task / git / publish のガードは誤検知より見逃し低減を優先する。
 
 ---
 
@@ -653,6 +687,7 @@ Review and apply the suggested changes.
 * warning message
 * Escape Folder への誘導
 * 基本設定項目
+* save / git / terminal / task / delete / publish へ広げるための policy モデルと command surface 定義
 
 ### 19.2 MVP から外す
 
@@ -660,18 +695,33 @@ Review and apply the suggested changes.
 * 複雑な policy engine
 * remote/container 固有最適化
 * org 配布用の集中管理機能
+* 全ターミナル入力の完全インターセプト
+* すべての外部 CLI / publish provider の網羅対応
 
 ---
 
 ## 20. 将来拡張
 
 1. 高感度ディレクトリ単位の警告
-2. Git 初期化や add の補助警告
-3. AI 拡張向け context-scope hardening
-4. 組織配布用 policy profile
-5. known telemetry profile の自動更新
-6. path risk score 表示
-7. safe workspace launcher
+2. Git 初期化や add / commit / push / publish の安全ガード
+3. save / refactor / delete の実行前プレビューと require-confirmation
+4. task / terminal / debug 実行の危険コマンド検知
+5. AI 拡張向け context-scope hardening
+6. 組織配布用 policy profile
+7. known telemetry profile の自動更新
+8. path risk score 表示
+9. safe workspace launcher
+10. 製品名を Workspace Safety Guard に拡張する再設計
+
+## 20.1 製品進化の方向
+
+HomeGuard は「home directory を開かない」ための名前と設計を持つが、実際に守りたいのは workspace 上の危険操作全般である。
+
+このため製品としては、次の段階で **Workspace Safety Guard** に進化できる。
+
+* 第1段階: home 直開き検知と escape folder
+* 第2段階: save / git / terminal / task / delete / publish の safety hooks
+* 第3段階: policy, audit, rollback, org profile を含む workspace-wide safety platform
 
 ---
 
@@ -716,3 +766,5 @@ Review and apply the suggested changes.
 HomeGuard は、`$HOME` 直開きという小さく見えるが実害の大きい操作に対して、CLI と VS Code 拡張の二段構えで対処する軽量セキュリティツールである。
 
 本ツールの中核は、危険な引数の検出ではなく、**最終的に何を開こうとしているかの判定** にある。また、単なる禁止ではなく、Escape Folder と Privacy Hardening により、作業継続性と実用性を保ちながら安全性を高める点に価値がある。
+
+さらに次段階では、open の防止に留まらず、save / git / terminal / task / delete / publish まで含めた **Workspace Safety Guard** へ拡張することで、秘密情報流出だけでなく、破壊的削除・誤コミット・誤公開・誤実行の抑止を主目的に据える。

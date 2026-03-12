@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
 
 import { buildCliExecutionPlan, runHomeguardCode } from "../src";
 
@@ -48,6 +49,23 @@ describe("buildCliExecutionPlan", () => {
 
     expect(plan.shouldRedirect).toBe(true);
     expect(plan.args).toEqual(["~/work/projectA", "/Users/akira/work/_escape"]);
+  });
+
+  it("warns for high-risk folders without redirecting them", async () => {
+    const plan = await buildCliExecutionPlan(["~/.ssh/config"], {
+      mode: "redirect",
+      cwd: "/tmp",
+      env: {},
+      homeDir: "/Users/akira",
+      platform: "darwin",
+      highRiskFolders: ["~/.ssh"],
+      realpath: async (candidate) => candidate
+    });
+
+    expect(plan.shouldWarn).toBe(true);
+    expect(plan.shouldRedirect).toBe(false);
+    expect(plan.args).toEqual(["~/.ssh/config"]);
+    expect(plan.warnings.at(-1)).toContain("high-risk folder");
   });
 
   it("blocks dangerous targets", async () => {
@@ -132,5 +150,82 @@ describe("runHomeguardCode", () => {
     expect(spawnCommand).toHaveBeenCalledWith("code", ["~/work/projectA"], {
       stdio: "inherit"
     });
+  });
+
+  it("creates the escape folder before redirecting", async () => {
+    const spawnCommand = vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        on: (event: string, listener: (...args: unknown[]) => void) => EventEmitter;
+      };
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const ensureEscapeFolder = vi.fn(async () => ({
+      path: "/Users/akira/work/_escape",
+      ephemeral: false,
+      createdFiles: []
+    }));
+
+    const exitCode = await runHomeguardCode(["~"], {
+      mode: "redirect",
+      cwd: "/tmp",
+      env: {},
+      homeDir: "/Users/akira",
+      platform: "darwin",
+      realpath: async (candidate) => candidate,
+      ensureEscapeFolder
+    }, {
+      spawnCommand: spawnCommand as never,
+      stderr: { write: () => true }
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureEscapeFolder).toHaveBeenCalledOnce();
+    expect(spawnCommand).toHaveBeenCalledWith("code", ["/Users/akira/work/_escape"], {
+      stdio: "inherit"
+    });
+  });
+
+  it("reuses the same ephemeral escape path for planning and creation", async () => {
+    const spawnCommand = vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        on: (event: string, listener: (...args: unknown[]) => void) => EventEmitter;
+      };
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    const ensureEscapeFolder = vi.fn(async (options: { timestamp?: string }) => ({
+      path: `/tmp/vscode-home-escape-${options.timestamp}`,
+      ephemeral: true,
+      createdFiles: []
+    }));
+    const now = vi.fn()
+      .mockReturnValueOnce(new Date("2026-03-09T10:11:12.000Z"))
+      .mockReturnValueOnce(new Date("2026-03-09T10:11:13.000Z"));
+
+    const exitCode = await runHomeguardCode(["~"], {
+      mode: "redirect",
+      enableEphemeralEscape: true,
+      cwd: "/tmp",
+      env: {},
+      homeDir: "/Users/akira",
+      platform: "darwin",
+      now,
+      realpath: async (candidate) => candidate,
+      ensureEscapeFolder
+    }, {
+      spawnCommand: spawnCommand as never,
+      stderr: { write: () => true }
+    });
+
+    expect(exitCode).toBe(0);
+    expect(ensureEscapeFolder).toHaveBeenCalledWith(expect.objectContaining({
+      timestamp: "2026-03-09T10:11:12.000Z"
+    }));
+    expect(spawnCommand).toHaveBeenCalledWith(
+      "code",
+      [`${tmpdir()}/vscode-home-escape-2026-03-09T10-11-12-000Z`],
+      { stdio: "inherit" }
+    );
   });
 });

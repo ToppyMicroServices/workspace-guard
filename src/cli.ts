@@ -3,7 +3,7 @@
 import { runHomeguardCode } from "./cli/homeguardCode";
 
 void runHomeguardCode(process.argv.slice(2), {
-  mode: "warn"
+  mode: "redirect"
 }).then((exitCode) => {
   process.exitCode = exitCode;
 }).catch((error: unknown) => {
