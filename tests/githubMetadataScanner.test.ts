@@ -209,6 +209,70 @@ jobs:
     ]));
   });
 
+  it("tracks tainted env values into shell execution", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/tainted-env.yml", `name: tainted env
+on:
+  pull_request:
+permissions:
+  contents: read
+env:
+  PR_TITLE: \${{ github.event.pull_request.title }}
+jobs:
+  suspicious:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          printf '%s\\n' "$PR_TITLE"
+          bash -c "$PR_TITLE"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-018",
+        file: ".github/workflows/tainted-env.yml"
+      })
+    ]));
+  });
+
+  it("flags user-controlled expressions passed into action inputs", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/tainted-with.yml", `name: tainted with
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  suspicious:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        with:
+          script: \${{ github.event.pull_request.body }}
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+        with:
+          ref: \${{ github.event.pull_request.head.ref }}
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const findings = result.findings.filter((finding) => finding.id === "WG-GHWF-019");
+
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        file: ".github/workflows/tainted-with.yml",
+        severity: "high"
+      }),
+      expect.objectContaining({
+        file: ".github/workflows/tainted-with.yml",
+        severity: "medium"
+      })
+    ]));
+  });
+
   it("scans local reusable workflow files that are invoked by caller workflows", async () => {
     const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
     tempDirs.push(rootPath);

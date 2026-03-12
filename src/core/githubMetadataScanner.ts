@@ -52,6 +52,8 @@ interface WorkflowContext {
   triggers: WorkflowTriggerSummary;
 }
 
+type TaintedEnvMap = Map<string, string>;
+
 const defaultFs: GithubMetadataScannerFs = {
   readdir: fs.readdir,
   readFile: async (targetPath, encoding) => await fs.readFile(targetPath, encoding)
@@ -98,6 +100,7 @@ const SECRET_ECHO_PATTERN = /\b(echo|printf)\b.+\${{\s*secrets\.[^}]+}}/i;
 const TEMPLATE_SECRET_REQUEST_PATTERN = /\b(paste|attach|share|send|provide|include)\b.+\b(token|secret|password|credential|api[ -]?key|ssh key|private key|cookie)\b/i;
 const TEMPLATE_COMMAND_PATTERN = /\b(curl|wget)\b.+\|\s*(bash|sh)\b|\bsudo\b|\bchmod\s+\+x\b/i;
 const USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs|inputs\.)/i;
+const EXECUTION_SINK_KEYS = new Set(["script", "command", "args", "entrypoint", "ref", "repository"]);
 
 function toRelativePath(rootPath: string, filePath: string): string {
   return path.relative(rootPath, filePath).split(path.sep).join("/");
@@ -183,6 +186,44 @@ function findLineNumber(lines: string[], pattern: RegExp | string): number | und
 function findLineText(lines: string[], pattern: RegExp | string): string {
   const lineNumber = findLineNumber(lines, pattern);
   return lineNumber ? (lines[lineNumber - 1]?.trim() ?? "") : (typeof pattern === "string" ? pattern : pattern.source);
+}
+
+function mergeTaintedEnv(...maps: TaintedEnvMap[]): TaintedEnvMap {
+  const merged = new Map<string, string>();
+  for (const map of maps) {
+    for (const [key, value] of map.entries()) {
+      merged.set(key, value);
+    }
+  }
+
+  return merged;
+}
+
+function collectTaintedEnv(env: unknown): TaintedEnvMap {
+  const tainted = new Map<string, string>();
+  if (!isObject(env)) {
+    return tainted;
+  }
+
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string" && USER_CONTROLLED_EXPRESSION_PATTERN.test(value)) {
+      tainted.set(key, value);
+    }
+  }
+
+  return tainted;
+}
+
+function findReferencedTaintedEnv(runValue: string, taintedEnv: TaintedEnvMap): [string, string] | undefined {
+  for (const [key, source] of taintedEnv.entries()) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`\\$(?:env:)?${escapedKey}\\b|\\$\\{${escapedKey}\\}`, "i");
+    if (pattern.test(runValue)) {
+      return [key, source];
+    }
+  }
+
+  return undefined;
 }
 
 function normalizeWorkflowTriggers(value: unknown): WorkflowTriggerSummary {
@@ -386,7 +427,8 @@ function scanActionReference(
 
 function scanRunBlock(
   context: WorkflowContext,
-  runValue: string
+  runValue: string,
+  taintedEnv: TaintedEnvMap
 ): GithubMetadataFinding[] {
   const findings: GithubMetadataFinding[] = [];
   const lineNumber = findLineNumber(context.lines, runValue) ?? findLineNumber(context.lines, /^\s*run\s*:/i);
@@ -444,6 +486,55 @@ function scanRunBlock(
       evidence: runValue.trim(),
       message: "Workflow step interpolates user-controlled GitHub context into shell execution.",
       suggestedAction: "Avoid direct shell interpolation of event fields; pass values through validated inputs or quoted environment bindings.",
+      confidence: "medium"
+    }));
+  }
+
+  const taintedEnvReference = findReferencedTaintedEnv(runValue, taintedEnv);
+  if (taintedEnvReference) {
+    findings.push(createFinding(context.file, lineNumber, {
+      id: "WG-GHWF-018",
+      severity: "high",
+      category: "workflow-command",
+      reason: `workflow shell command consumes tainted env variable ${taintedEnvReference[0]}`,
+      evidence: taintedEnvReference[1],
+      message: "Workflow run step executes shell code that reads an environment variable populated from user-controlled GitHub context.",
+      suggestedAction: "Do not pass attacker-controlled event fields into shell via env; validate or sanitize first.",
+      confidence: "medium"
+    }));
+  }
+
+  return findings;
+}
+
+function scanWithBlock(
+  context: WorkflowContext,
+  usesReference: string | undefined,
+  withValue: unknown
+): GithubMetadataFinding[] {
+  if (!isObject(withValue)) {
+    return [];
+  }
+
+  const findings: GithubMetadataFinding[] = [];
+
+  for (const [key, value] of Object.entries(withValue)) {
+    if (typeof value !== "string" || !USER_CONTROLLED_EXPRESSION_PATTERN.test(value)) {
+      continue;
+    }
+
+    if (!EXECUTION_SINK_KEYS.has(key)) {
+      continue;
+    }
+
+    findings.push(createFinding(context.file, findLineNumber(context.lines, value) ?? findLineNumber(context.lines, new RegExp(`^\\s*${key}\\s*:`, "i")), {
+      id: "WG-GHWF-019",
+      severity: key === "script" || key === "command" || key === "entrypoint" ? "high" : "medium",
+      category: "workflow-expression",
+      reason: `${key} receives a user-controlled GitHub expression`,
+      evidence: value,
+      message: `${usesReference ?? "Workflow step"} passes user-controlled GitHub context into ${key}.`,
+      suggestedAction: `Avoid feeding attacker-controlled expressions into ${key}; validate values before passing them into execution-sensitive inputs.`,
       confidence: "medium"
     }));
   }
@@ -514,6 +605,7 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
   const context = buildWorkflowContext(file, content);
   const findings: GithubMetadataFinding[] = [...parseFindings, ...scanTriggerSurface(context)];
   const workflowPermissions = context.data.permissions;
+  const workflowTaintedEnv = collectTaintedEnv(context.data.env);
   const jobs = isObject(context.data.jobs) ? context.data.jobs : {};
   const workflowActionReferences: string[] = [];
   const hasCheckoutStep = context.lines.some((line) => /uses:\s*actions\/checkout@/i.test(line));
@@ -550,8 +642,10 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
     }
 
     const jobUses = asString(jobValue.uses);
+    const jobTaintedEnv = mergeTaintedEnv(workflowTaintedEnv, collectTaintedEnv(jobValue.env));
     if (jobUses) {
       findings.push(...scanActionReference(context, jobUses, jobUses));
+      findings.push(...scanWithBlock(context, jobUses, jobValue.with));
     }
 
     if (jobValue.secrets === "inherit") {
@@ -594,8 +688,10 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
       }
 
       const stepUses = asString(step.uses);
+      const stepTaintedEnv = mergeTaintedEnv(jobTaintedEnv, collectTaintedEnv(step.env));
       if (stepUses) {
         findings.push(...scanActionReference(context, stepUses, stepUses));
+        findings.push(...scanWithBlock(context, stepUses, step.with));
 
         if (/^actions\/checkout@/i.test(stepUses)) {
           const stepWith = isObject(step.with) ? step.with : {};
@@ -612,7 +708,7 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
 
       const runValue = asString(step.run);
       if (runValue) {
-        findings.push(...scanRunBlock(context, runValue));
+        findings.push(...scanRunBlock(context, runValue, stepTaintedEnv));
         if (/github\.event\.pull_request\.head\./.test(runValue)) {
           pullRequestTargetChecksOutHead = true;
         }
