@@ -77,6 +77,7 @@ npx workspace-guard-scan .
 Current `.github` rules cover:
 
 - `.github/workflows/*.yml`: `pull_request_target`, broad `permissions`, unpinned `uses`, dangerous `run`, `self-hosted`, and PR-head checkout in privileged workflows
+- `.github/workflows/*.yml`: `docker://` actions without digest pin, external reusable workflows, `secrets: inherit`, scheduled/manual triggers, and untrusted GitHub-context interpolation into shell execution
 - `.github/dependabot.yml`: `insecure-external-code-execution: allow`
 - `.github/CODEOWNERS`: repository-wide catch-all review routing entries
 - `.github/ISSUE_TEMPLATE/*` and `PULL_REQUEST_TEMPLATE*`: secret requests and risky shell instructions

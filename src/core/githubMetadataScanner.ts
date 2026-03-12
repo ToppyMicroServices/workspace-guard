@@ -63,6 +63,7 @@ const CODEOWNERS_FILE_PATTERN = /^\.github\/CODEOWNERS$/;
 const ISSUE_TEMPLATE_FILE_PATTERN = /^\.github\/ISSUE_TEMPLATE\/.+/;
 const PR_TEMPLATE_FILE_PATTERN = /^\.github\/PULL_REQUEST_TEMPLATE(?:\/.+|[^/]*)$/;
 const CODEQL_ACTION_PATTERN = /^github\/codeql-action\/analyze@/i;
+const EXTERNAL_REUSABLE_WORKFLOW_PATTERN = /^[^./][^@]+\/\.github\/workflows\/[^@]+@/i;
 const RISKY_WRITE_PERMISSION_SEVERITY: Record<string, GithubMetadataFindingSeverity> = {
   "actions": "high",
   "attestations": "medium",
@@ -80,8 +81,16 @@ const DANGEROUS_RUN_PATTERNS = [
   /\bwget\b.+\|\s*(bash|sh)\b/i,
   /\bInvoke-WebRequest\b.+\|\s*(iex|pwsh|powershell)\b/i,
   /\birm\b.+\|\s*(iex|pwsh|powershell)\b/i,
+  /\b(?:bash|sh)\s+-c\s+["'`$].*(?:curl|wget|Invoke-WebRequest|irm).*/i,
+  /\beval\s+["'`$].*(?:curl|wget|Invoke-WebRequest|irm).*/i,
   /\bbash\s+<\(/i,
   /\bsource\s+<\(/i,
+  /\bbase64\b[^\n]*(?:-d|--decode)[^\n]*\|\s*(?:bash|sh|pwsh|powershell)\b/i,
+  /\bcertutil\b[^\n]*-decode\b/i,
+  /\b(?:powershell|pwsh)\b[^\n]*-(?:EncodedCommand|enc)\b/i,
+  /\bFromBase64String\b/i,
+  /\bpython(?:3)?\b[^\n]*-c[^\n]*\b(exec|eval)\s*\(/i,
+  /\bnode\b[^\n]*-(?:e|p)\b[^\n]*\b(?:eval|Function)\s*\(/i,
   /\bsudo\b/i,
   /\bchmod\s+\+x\b/i
 ];
@@ -323,24 +332,56 @@ function scanActionReference(
   actionReference: string,
   lineHint: string | RegExp
 ): GithubMetadataFinding[] {
-  if (actionReference.startsWith("./") || actionReference.startsWith("docker://")) {
-    return [];
+  const findings: GithubMetadataFinding[] = [];
+
+  if (actionReference.startsWith("docker://")) {
+    if (!/@sha256:[0-9a-f]{64}$/i.test(actionReference)) {
+      findings.push(createFinding(context.file, findLineNumber(context.lines, lineHint), {
+        id: "WG-GHWF-016",
+        severity: "medium",
+        category: "workflow-action-pin",
+        reason: "docker action reference is not pinned to an immutable digest",
+        evidence: actionReference,
+        message: "docker:// action reference uses a mutable tag instead of an image digest.",
+        suggestedAction: "Pin docker actions to an image digest such as @sha256:... .",
+        confidence: "high"
+      }));
+    }
+
+    return findings;
   }
 
-  if (isPinnedActionReference(actionReference)) {
-    return [];
+  if (actionReference.startsWith("./")) {
+    return findings;
   }
 
-  return [createFinding(context.file, findLineNumber(context.lines, lineHint), {
-    id: "WG-GHWF-004",
-    severity: "medium",
-    category: "workflow-action-pin",
-    reason: "workflow action is referenced by tag or branch instead of a full commit SHA",
-    evidence: actionReference,
-    message: "GitHub Action or reusable workflow reference is mutable and should be pinned to a full commit SHA.",
-    suggestedAction: "Pin the reference to a 40-character commit SHA and document update cadence.",
-    confidence: "high"
-  })];
+  if (!isPinnedActionReference(actionReference)) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, lineHint), {
+      id: "WG-GHWF-004",
+      severity: "medium",
+      category: "workflow-action-pin",
+      reason: "workflow action is referenced by tag or branch instead of a full commit SHA",
+      evidence: actionReference,
+      message: "GitHub Action or reusable workflow reference is mutable and should be pinned to a full commit SHA.",
+      suggestedAction: "Pin the reference to a 40-character commit SHA and document update cadence.",
+      confidence: "high"
+    }));
+  }
+
+  if (EXTERNAL_REUSABLE_WORKFLOW_PATTERN.test(actionReference)) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, lineHint), {
+      id: "WG-GHWF-017",
+      severity: "medium",
+      category: "workflow-reusable",
+      reason: "workflow calls a reusable workflow whose contents are not local to this repository",
+      evidence: actionReference,
+      message: "Reusable workflow contents live outside this repository, so local scanning cannot verify the callee logic directly.",
+      suggestedAction: "Audit the referenced workflow revision separately or vendor the reusable workflow into a reviewed internal repository.",
+      confidence: "high"
+    }));
+  }
+
+  return findings;
 }
 
 function scanRunBlock(
@@ -349,6 +390,11 @@ function scanRunBlock(
 ): GithubMetadataFinding[] {
   const findings: GithubMetadataFinding[] = [];
   const lineNumber = findLineNumber(context.lines, runValue) ?? findLineNumber(context.lines, /^\s*run\s*:/i);
+  const hasDecodedPayload = /\bbase64\b[^\n]*(?:-d|--decode)\b/i.test(runValue)
+    || /\bFromBase64String\b/i.test(runValue)
+    || /\bcertutil\b[^\n]*-decode\b/i.test(runValue);
+  const executesVariablePayload = /\b(?:bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*/i.test(runValue)
+    || /\beval\s+["']?\$[A-Za-z_][A-Za-z0-9_]*/i.test(runValue);
 
   if (DANGEROUS_RUN_PATTERNS.some((pattern) => pattern.test(runValue))) {
     findings.push(createFinding(context.file, lineNumber, {
@@ -360,6 +406,19 @@ function scanRunBlock(
       message: "Workflow run step executes a high-risk shell pattern that deserves manual review.",
       suggestedAction: "Remove external pipe-to-shell patterns and avoid privileged shell commands in CI jobs.",
       confidence: "medium"
+    }));
+  }
+
+  if (hasDecodedPayload && executesVariablePayload) {
+    findings.push(createFinding(context.file, lineNumber, {
+      id: "WG-GHWF-006",
+      severity: "high",
+      category: "workflow-command",
+      reason: "workflow decodes an encoded payload and executes it through a shell",
+      evidence: runValue.trim(),
+      message: "Workflow run step decodes an encoded payload and feeds it into shell execution, which is a strong obfuscation signal.",
+      suggestedAction: "Replace encoded payload execution with checked-in scripts or explicit, reviewable commands.",
+      confidence: "high"
     }));
   }
 

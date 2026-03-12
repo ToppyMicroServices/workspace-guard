@@ -175,9 +175,75 @@ jobs:
 
     expect(findingIds).toEqual(expect.arrayContaining([
       "WG-GHWF-004",
+      "WG-GHWF-017",
       "WG-GHWF-011",
       "WG-GHWF-012",
       "WG-GHWF-015"
+    ]));
+  });
+
+  it("detects obfuscated shell execution and mutable docker action references", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/obfuscated.yml", `name: obfuscated
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  suspicious:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker://alpine:3.20
+      - run: |
+          PAYLOAD=$(echo ZWNobyBoaQ== | base64 -d)
+          bash -c "$PAYLOAD"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const findingIds = result.findings.map((finding) => finding.id);
+
+    expect(findingIds).toEqual(expect.arrayContaining([
+      "WG-GHWF-006",
+      "WG-GHWF-016"
+    ]));
+  });
+
+  it("scans local reusable workflow files that are invoked by caller workflows", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/caller.yml", `name: caller
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  delegate:
+    uses: ./.github/workflows/reusable.yml
+`);
+    await writeRepoFile(rootPath, ".github/workflows/reusable.yml", `name: reusable
+on:
+  workflow_call:
+jobs:
+  dangerous:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: echo \${{ github.event.pull_request.title }}
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-003",
+        file: ".github/workflows/reusable.yml"
+      }),
+      expect.objectContaining({
+        id: "WG-GHWF-011",
+        file: ".github/workflows/reusable.yml"
+      })
     ]));
   });
 });
