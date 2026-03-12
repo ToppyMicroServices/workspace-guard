@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { parseDocument } from "yaml";
 
 export type GithubMetadataFindingSeverity = "high" | "medium" | "info";
 export type GithubMetadataFindingConfidence = "high" | "medium" | "low";
@@ -37,6 +38,20 @@ export interface GithubMetadataScanResult {
   findings: GithubMetadataFinding[];
 }
 
+type YamlObject = Record<string, unknown>;
+type GithubPermissions = Record<string, unknown>;
+
+interface WorkflowTriggerSummary {
+  names: Set<string>;
+}
+
+interface WorkflowContext {
+  file: string;
+  lines: string[];
+  data: YamlObject;
+  triggers: WorkflowTriggerSummary;
+}
+
 const defaultFs: GithubMetadataScannerFs = {
   readdir: fs.readdir,
   readFile: async (targetPath, encoding) => await fs.readFile(targetPath, encoding)
@@ -47,20 +62,33 @@ const DEPENDABOT_FILE_PATTERN = /^\.github\/dependabot\.ya?ml$/i;
 const CODEOWNERS_FILE_PATTERN = /^\.github\/CODEOWNERS$/;
 const ISSUE_TEMPLATE_FILE_PATTERN = /^\.github\/ISSUE_TEMPLATE\/.+/;
 const PR_TEMPLATE_FILE_PATTERN = /^\.github\/PULL_REQUEST_TEMPLATE(?:\/.+|[^/]*)$/;
-const WRITE_PERMISSION_PATTERN = /^\s*(contents|packages|actions|id-token)\s*:\s*write\s*$/i;
-const USES_PATTERN = /^\s*-\s*uses:\s*["']?([^"'#\s]+)["']?|^\s*uses:\s*["']?([^"'#\s]+)["']?/i;
-const SELF_HOSTED_PATTERN = /\bself-hosted\b/i;
-const PULL_REQUEST_TARGET_PATTERN = /\bpull_request_target\b/;
+const CODEQL_ACTION_PATTERN = /^github\/codeql-action\/analyze@/i;
+const RISKY_WRITE_PERMISSION_SEVERITY: Record<string, GithubMetadataFindingSeverity> = {
+  "actions": "high",
+  "attestations": "medium",
+  "contents": "medium",
+  "deployments": "medium",
+  "id-token": "high",
+  "issues": "medium",
+  "packages": "medium",
+  "pages": "medium",
+  "pull-requests": "medium",
+  "statuses": "medium"
+};
 const DANGEROUS_RUN_PATTERNS = [
   /\bcurl\b.+\|\s*(bash|sh)\b/i,
   /\bwget\b.+\|\s*(bash|sh)\b/i,
   /\bInvoke-WebRequest\b.+\|\s*(iex|pwsh|powershell)\b/i,
+  /\birm\b.+\|\s*(iex|pwsh|powershell)\b/i,
+  /\bbash\s+<\(/i,
+  /\bsource\s+<\(/i,
   /\bsudo\b/i,
   /\bchmod\s+\+x\b/i
 ];
 const SECRET_ECHO_PATTERN = /\b(echo|printf)\b.+\${{\s*secrets\.[^}]+}}/i;
 const TEMPLATE_SECRET_REQUEST_PATTERN = /\b(paste|attach|share|send|provide|include)\b.+\b(token|secret|password|credential|api[ -]?key|ssh key|private key|cookie)\b/i;
 const TEMPLATE_COMMAND_PATTERN = /\b(curl|wget)\b.+\|\s*(bash|sh)\b|\bsudo\b|\bchmod\s+\+x\b/i;
+const USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs|inputs\.)/i;
 
 function toRelativePath(rootPath: string, filePath: string): string {
   return path.relative(rootPath, filePath).split(path.sep).join("/");
@@ -68,6 +96,18 @@ function toRelativePath(rootPath: string, filePath: string): string {
 
 function toLines(content: string): string[] {
   return content.split(/\r?\n/);
+}
+
+function isObject(value: unknown): value is YamlObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function createFinding(
@@ -123,143 +163,416 @@ async function walkDirectory(
   return nestedFiles.flat();
 }
 
-function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[] {
-  const findings: GithubMetadataFinding[] = [];
+function findLineNumber(lines: string[], pattern: RegExp | string): number | undefined {
+  const matcher = typeof pattern === "string"
+    ? (line: string) => line.includes(pattern)
+    : (line: string) => pattern.test(line);
+  const index = lines.findIndex((line) => matcher(line));
+  return index === -1 ? undefined : index + 1;
+}
+
+function findLineText(lines: string[], pattern: RegExp | string): string {
+  const lineNumber = findLineNumber(lines, pattern);
+  return lineNumber ? (lines[lineNumber - 1]?.trim() ?? "") : (typeof pattern === "string" ? pattern : pattern.source);
+}
+
+function normalizeWorkflowTriggers(value: unknown): WorkflowTriggerSummary {
+  if (typeof value === "string") {
+    return {
+      names: new Set([value])
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return {
+      names: new Set(value.flatMap((entry) => typeof entry === "string" ? [entry] : []))
+    };
+  }
+
+  if (isObject(value)) {
+    return {
+      names: new Set(Object.keys(value))
+    };
+  }
+
+  return {
+    names: new Set()
+  };
+}
+
+function buildWorkflowContext(file: string, content: string): WorkflowContext {
   const lines = toLines(content);
-  let pullRequestTargetLine: number | undefined;
-  let checkoutLine: number | undefined;
-  let prHeadCheckoutLine: number | undefined;
+  const document = parseDocument(content, {
+    prettyErrors: false,
+    strict: false
+  });
+  const data = document.toJS({ maxAliasCount: 50 }) as unknown;
 
-  lines.forEach((line, index) => {
-    const lineNumber = index + 1;
+  if (document.errors.length > 0 || !isObject(data)) {
+    return {
+      file,
+      lines,
+      data: {},
+      triggers: { names: new Set() }
+    };
+  }
 
-    if (PULL_REQUEST_TARGET_PATTERN.test(line) && !line.trimStart().startsWith("#")) {
-      pullRequestTargetLine ??= lineNumber;
-    }
+  return {
+    file,
+    lines,
+    data,
+    triggers: normalizeWorkflowTriggers(data.on)
+  };
+}
 
-    if (/^\s*permissions\s*:\s*write-all\s*$/i.test(line)) {
-      findings.push(createFinding(file, lineNumber, {
+function collectWorkflowParseFindings(file: string, content: string): GithubMetadataFinding[] {
+  const document = parseDocument(content, {
+    prettyErrors: false,
+    strict: false
+  });
+
+  return document.errors.map((error) => {
+    const line = typeof error.linePos?.[0]?.line === "number" ? error.linePos[0].line : undefined;
+    return createFinding(file, line, {
+      id: "WG-GHWF-000",
+      severity: "medium",
+      category: "workflow-parse",
+      reason: "workflow YAML could not be parsed reliably",
+      evidence: error.message,
+      message: "Workflow file has YAML parse errors, so automated review is incomplete.",
+      suggestedAction: "Fix YAML syntax before trusting the workflow.",
+      confidence: "high"
+    });
+  });
+}
+
+function scanPermissions(
+  context: WorkflowContext,
+  permissions: unknown,
+  scopeLabel: string,
+  actionReferences: string[]
+): GithubMetadataFinding[] {
+  const findings: GithubMetadataFinding[] = [];
+
+  if (permissions === undefined) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /^\s*permissions\s*:/i), {
+      id: "WG-GHWF-010",
+      severity: "info",
+      category: "workflow-permissions",
+      reason: `${scopeLabel} does not declare explicit token permissions`,
+      evidence: scopeLabel,
+      message: `${scopeLabel} omits explicit permissions, so token scope depends on repository defaults.`,
+      suggestedAction: "Declare minimal permissions explicitly at workflow or job scope.",
+      confidence: "medium"
+    }));
+    return findings;
+  }
+
+  if (typeof permissions === "string") {
+    if (permissions === "write-all") {
+      findings.push(createFinding(context.file, findLineNumber(context.lines, /^\s*permissions\s*:\s*write-all\s*$/i), {
         id: "WG-GHWF-001",
         severity: "high",
         category: "workflow-permissions",
-        reason: "workflow grants write-all token permissions",
-        evidence: line.trim(),
-        message: "Workflow grants broad write permissions to GITHUB_TOKEN.",
+        reason: `${scopeLabel} grants write-all token permissions`,
+        evidence: "permissions: write-all",
+        message: `${scopeLabel} grants broad write permissions to GITHUB_TOKEN.`,
         suggestedAction: "Replace write-all with per-job minimal permissions.",
         confidence: "high"
       }));
     }
 
-    const permissionMatch = line.match(WRITE_PERMISSION_PATTERN);
-    if (permissionMatch) {
-      const permissionName = permissionMatch[1].toLowerCase();
-      findings.push(createFinding(file, lineNumber, {
-        id: permissionName === "id-token" ? "WG-GHWF-002" : "WG-GHWF-003",
-        severity: permissionName === "id-token" ? "high" : "medium",
-        category: "workflow-permissions",
-        reason: `${permissionName} permission is granted with write access`,
-        evidence: line.trim(),
-        message: `Workflow grants ${permissionName}: write, which expands the impact of token misuse.`,
-        suggestedAction: `Reduce ${permissionName} to read or remove it unless the job strictly requires write access.`,
-        confidence: "high"
-      }));
+    return findings;
+  }
+
+  if (!isObject(permissions)) {
+    return findings;
+  }
+
+  for (const [permissionName, permissionValue] of Object.entries(permissions as GithubPermissions)) {
+    if (permissionValue !== "write") {
+      continue;
     }
 
-    const usesMatch = line.match(USES_PATTERN);
-    if (usesMatch) {
-      const actionReference = usesMatch[1] ?? usesMatch[2];
-      if (!actionReference) {
-        return;
-      }
-
-      if (actionReference.startsWith("./") || actionReference.startsWith("docker://")) {
-        return;
-      }
-
-      if (/^actions\/checkout@/i.test(actionReference)) {
-        checkoutLine = lineNumber;
-      }
-
-      if (!isPinnedActionReference(actionReference)) {
-        findings.push(createFinding(file, lineNumber, {
-          id: "WG-GHWF-004",
-          severity: "medium",
-          category: "workflow-action-pin",
-          reason: "workflow action is referenced by tag or branch instead of a full commit SHA",
-          evidence: line.trim(),
-          message: "GitHub Action reference is mutable and should be pinned to a full commit SHA.",
-          suggestedAction: "Pin the action to a 40-character commit SHA and document update cadence.",
-          confidence: "high"
-        }));
-      }
+    if (permissionName === "security-events" && actionReferences.some((entry) => CODEQL_ACTION_PATTERN.test(entry))) {
+      continue;
     }
 
-    if (/github\.event\.pull_request\.head\.(sha|ref)/.test(line)) {
-      prHeadCheckoutLine ??= lineNumber;
+    const severity = RISKY_WRITE_PERMISSION_SEVERITY[permissionName];
+    if (!severity) {
+      continue;
     }
 
-    if ((/^\s*runs-on\s*:/i.test(line) || /^\s*-\s*self-hosted\s*$/i.test(line)) && SELF_HOSTED_PATTERN.test(line)) {
-      findings.push(createFinding(file, lineNumber, {
-        id: "WG-GHWF-005",
-        severity: "high",
-        category: "workflow-runner",
-        reason: "workflow uses a self-hosted runner",
-        evidence: line.trim(),
-        message: "Self-hosted runners expand the trust boundary to runner-host assets and network access.",
-        suggestedAction: "Prefer GitHub-hosted runners or isolate self-hosted runners behind strict segmentation.",
-        confidence: "high"
-      }));
-    }
+    findings.push(createFinding(context.file, findLineNumber(context.lines, new RegExp(`^\\s*${permissionName}\\s*:\\s*write\\s*$`, "i")), {
+      id: permissionName === "id-token" ? "WG-GHWF-002" : "WG-GHWF-003",
+      severity,
+      category: "workflow-permissions",
+      reason: `${scopeLabel} grants ${permissionName}: write`,
+      evidence: `${permissionName}: write`,
+      message: `${scopeLabel} grants ${permissionName}: write, which expands the impact of token misuse.`,
+      suggestedAction: `Reduce ${permissionName} to read or remove it unless the job strictly requires write access.`,
+      confidence: "high"
+    }));
+  }
 
-    if (DANGEROUS_RUN_PATTERNS.some((pattern) => pattern.test(line))) {
-      findings.push(createFinding(file, lineNumber, {
-        id: "WG-GHWF-006",
-        severity: "high",
-        category: "workflow-command",
-        reason: "workflow run step includes a dangerous shell pattern",
-        evidence: line.trim(),
-        message: "Workflow run step executes a high-risk shell pattern that deserves manual review.",
-        suggestedAction: "Remove external pipe-to-shell patterns and avoid privileged shell commands in CI jobs.",
-        confidence: "medium"
-      }));
-    }
+  return findings;
+}
 
-    if (SECRET_ECHO_PATTERN.test(line)) {
-      findings.push(createFinding(file, lineNumber, {
-        id: "WG-GHWF-007",
-        severity: "high",
-        category: "workflow-command",
-        reason: "workflow prints a GitHub secret into shell output",
-        evidence: line.trim(),
-        message: "Workflow step may expose secrets through logs or downstream shell expansion.",
-        suggestedAction: "Avoid echoing secrets and pass them only through masked environment bindings when necessary.",
-        confidence: "high"
-      }));
-    }
-  });
+function scanActionReference(
+  context: WorkflowContext,
+  actionReference: string,
+  lineHint: string | RegExp
+): GithubMetadataFinding[] {
+  if (actionReference.startsWith("./") || actionReference.startsWith("docker://")) {
+    return [];
+  }
 
-  if (pullRequestTargetLine) {
-    findings.push(createFinding(file, pullRequestTargetLine, {
+  if (isPinnedActionReference(actionReference)) {
+    return [];
+  }
+
+  return [createFinding(context.file, findLineNumber(context.lines, lineHint), {
+    id: "WG-GHWF-004",
+    severity: "medium",
+    category: "workflow-action-pin",
+    reason: "workflow action is referenced by tag or branch instead of a full commit SHA",
+    evidence: actionReference,
+    message: "GitHub Action or reusable workflow reference is mutable and should be pinned to a full commit SHA.",
+    suggestedAction: "Pin the reference to a 40-character commit SHA and document update cadence.",
+    confidence: "high"
+  })];
+}
+
+function scanRunBlock(
+  context: WorkflowContext,
+  runValue: string
+): GithubMetadataFinding[] {
+  const findings: GithubMetadataFinding[] = [];
+  const lineNumber = findLineNumber(context.lines, runValue) ?? findLineNumber(context.lines, /^\s*run\s*:/i);
+
+  if (DANGEROUS_RUN_PATTERNS.some((pattern) => pattern.test(runValue))) {
+    findings.push(createFinding(context.file, lineNumber, {
+      id: "WG-GHWF-006",
+      severity: "high",
+      category: "workflow-command",
+      reason: "workflow run step includes a dangerous shell pattern",
+      evidence: runValue.trim(),
+      message: "Workflow run step executes a high-risk shell pattern that deserves manual review.",
+      suggestedAction: "Remove external pipe-to-shell patterns and avoid privileged shell commands in CI jobs.",
+      confidence: "medium"
+    }));
+  }
+
+  if (SECRET_ECHO_PATTERN.test(runValue)) {
+    findings.push(createFinding(context.file, lineNumber, {
+      id: "WG-GHWF-007",
+      severity: "high",
+      category: "workflow-command",
+      reason: "workflow prints a GitHub secret into shell output",
+      evidence: runValue.trim(),
+      message: "Workflow step may expose secrets through logs or downstream shell expansion.",
+      suggestedAction: "Avoid echoing secrets and pass them only through masked environment bindings when necessary.",
+      confidence: "high"
+    }));
+  }
+
+  if (USER_CONTROLLED_EXPRESSION_PATTERN.test(runValue)) {
+    findings.push(createFinding(context.file, lineNumber, {
+      id: "WG-GHWF-011",
+      severity: "high",
+      category: "workflow-command",
+      reason: "workflow shell command interpolates potentially attacker-controlled GitHub context",
+      evidence: runValue.trim(),
+      message: "Workflow step interpolates user-controlled GitHub context into shell execution.",
+      suggestedAction: "Avoid direct shell interpolation of event fields; pass values through validated inputs or quoted environment bindings.",
+      confidence: "medium"
+    }));
+  }
+
+  return findings;
+}
+
+function scanTriggerSurface(context: WorkflowContext): GithubMetadataFinding[] {
+  const findings: GithubMetadataFinding[] = [];
+
+  if (context.triggers.names.has("pull_request_target")) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /\bpull_request_target\b/), {
       id: "WG-GHWF-008",
       severity: "high",
       category: "workflow-trigger",
       reason: "workflow is triggered by pull_request_target",
-      evidence: lines[pullRequestTargetLine - 1]?.trim() ?? "pull_request_target",
+      evidence: findLineText(context.lines, /\bpull_request_target\b/),
       message: "pull_request_target runs in a higher-trust context and must not process untrusted PR code.",
       suggestedAction: "Prefer pull_request, or keep pull_request_target workflows read-only and avoid untrusted checkout.",
       confidence: "high"
     }));
   }
 
-  if (pullRequestTargetLine && checkoutLine && prHeadCheckoutLine) {
-    findings.push(createFinding(file, prHeadCheckoutLine, {
+  if (context.triggers.names.has("workflow_dispatch")) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /\bworkflow_dispatch\b/), {
+      id: "WG-GHWF-012",
+      severity: "info",
+      category: "workflow-trigger",
+      reason: "workflow can be manually dispatched",
+      evidence: findLineText(context.lines, /\bworkflow_dispatch\b/),
+      message: "workflow_dispatch enables manual execution and should be reviewed before repository import or transfer.",
+      suggestedAction: "Confirm that manual dispatch is necessary and that privileged inputs are validated.",
+      confidence: "high"
+    }));
+  }
+
+  if (context.triggers.names.has("schedule")) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /\bschedule\b/), {
+      id: "WG-GHWF-013",
+      severity: "info",
+      category: "workflow-trigger",
+      reason: "workflow runs on a schedule",
+      evidence: findLineText(context.lines, /\bschedule\b/),
+      message: "Scheduled workflows execute automatically and should be verified after repository import or fork.",
+      suggestedAction: "Confirm that schedules are expected and disable them until the workflow is trusted.",
+      confidence: "high"
+    }));
+  }
+
+  if (context.triggers.names.has("workflow_run")) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /\bworkflow_run\b/), {
+      id: "WG-GHWF-014",
+      severity: "info",
+      category: "workflow-trigger",
+      reason: "workflow is chained from other workflows",
+      evidence: findLineText(context.lines, /\bworkflow_run\b/),
+      message: "workflow_run expands execution flow beyond direct push or PR triggers.",
+      suggestedAction: "Review upstream workflows and confirm this chain does not elevate trust unexpectedly.",
+      confidence: "medium"
+    }));
+  }
+
+  return findings;
+}
+
+function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[] {
+  const parseFindings = collectWorkflowParseFindings(file, content);
+  const context = buildWorkflowContext(file, content);
+  const findings: GithubMetadataFinding[] = [...parseFindings, ...scanTriggerSurface(context)];
+  const workflowPermissions = context.data.permissions;
+  const jobs = isObject(context.data.jobs) ? context.data.jobs : {};
+  const workflowActionReferences: string[] = [];
+  const hasCheckoutStep = context.lines.some((line) => /uses:\s*actions\/checkout@/i.test(line));
+
+  for (const jobValue of Object.values(jobs)) {
+    if (!isObject(jobValue)) {
+      continue;
+    }
+
+    const jobUses = asString(jobValue.uses);
+    if (jobUses) {
+      workflowActionReferences.push(jobUses);
+    }
+
+    for (const step of asArray(jobValue.steps)) {
+      if (!isObject(step)) {
+        continue;
+      }
+
+      const stepUses = asString(step.uses);
+      if (stepUses) {
+        workflowActionReferences.push(stepUses);
+      }
+    }
+  }
+
+  findings.push(...scanPermissions(context, workflowPermissions, "Workflow", workflowActionReferences));
+
+  let pullRequestTargetChecksOutHead = false;
+
+  for (const [jobName, jobValue] of Object.entries(jobs)) {
+    if (!isObject(jobValue)) {
+      continue;
+    }
+
+    const jobUses = asString(jobValue.uses);
+    if (jobUses) {
+      findings.push(...scanActionReference(context, jobUses, jobUses));
+    }
+
+    if (jobValue.secrets === "inherit") {
+      findings.push(createFinding(context.file, findLineNumber(context.lines, /^\s*secrets\s*:\s*inherit\s*$/i), {
+        id: "WG-GHWF-015",
+        severity: "high",
+        category: "workflow-secrets",
+        reason: `job ${jobName} forwards all caller secrets to a reusable workflow`,
+        evidence: "secrets: inherit",
+        message: "Reusable workflow call inherits all available secrets.",
+        suggestedAction: "Pass only the specific secrets required by the reusable workflow.",
+        confidence: "high"
+      }));
+    }
+
+    if (jobValue.permissions !== undefined || workflowPermissions === undefined) {
+      findings.push(...scanPermissions(context, jobValue.permissions, `Job ${jobName}`, workflowActionReferences));
+    }
+
+    const runsOnValues = [
+      asString(jobValue["runs-on"]),
+      ...asArray(jobValue["runs-on"]).flatMap((entry) => typeof entry === "string" ? [entry] : [])
+    ].filter((entry): entry is string => Boolean(entry));
+    if (runsOnValues.some((entry) => /\bself-hosted\b/i.test(entry))) {
+      findings.push(createFinding(context.file, findLineNumber(context.lines, /\bself-hosted\b/i), {
+        id: "WG-GHWF-005",
+        severity: "high",
+        category: "workflow-runner",
+        reason: `job ${jobName} uses a self-hosted runner`,
+        evidence: findLineText(context.lines, /\bself-hosted\b/i),
+        message: "Self-hosted runners expand the trust boundary to runner-host assets and network access.",
+        suggestedAction: "Prefer GitHub-hosted runners or isolate self-hosted runners behind strict segmentation.",
+        confidence: "high"
+      }));
+    }
+
+    for (const step of asArray(jobValue.steps)) {
+      if (!isObject(step)) {
+        continue;
+      }
+
+      const stepUses = asString(step.uses);
+      if (stepUses) {
+        findings.push(...scanActionReference(context, stepUses, stepUses));
+
+        if (/^actions\/checkout@/i.test(stepUses)) {
+          const stepWith = isObject(step.with) ? step.with : {};
+          const ref = asString(stepWith.ref) ?? "";
+          const repository = asString(stepWith.repository) ?? "";
+          if (
+            /github\.event\.pull_request\.head\./.test(ref)
+            || /github\.event\.pull_request\.head\./.test(repository)
+          ) {
+            pullRequestTargetChecksOutHead = true;
+          }
+        }
+      }
+
+      const runValue = asString(step.run);
+      if (runValue) {
+        findings.push(...scanRunBlock(context, runValue));
+        if (/github\.event\.pull_request\.head\./.test(runValue)) {
+          pullRequestTargetChecksOutHead = true;
+        }
+      }
+    }
+  }
+
+  if (
+    context.triggers.names.has("pull_request_target")
+    && (pullRequestTargetChecksOutHead || (hasCheckoutStep && context.lines.some((line) => /github\.event\.pull_request\.head\./.test(line))))
+  ) {
+    findings.push(createFinding(context.file, findLineNumber(context.lines, /github\.event\.pull_request\.head\./), {
       id: "WG-GHWF-009",
       severity: "high",
       category: "workflow-checkout",
-      reason: "pull_request_target workflow checks out PR head code",
-      evidence: lines[prHeadCheckoutLine - 1]?.trim() ?? "github.event.pull_request.head.ref",
-      message: "This workflow combines pull_request_target with PR-head checkout, which can execute attacker-controlled code with elevated repository context.",
-      suggestedAction: "Do not check out PR-head code in pull_request_target workflows; split trusted metadata tasks from untrusted code execution.",
+      reason: "pull_request_target workflow checks out or executes PR head content",
+      evidence: findLineText(context.lines, /github\.event\.pull_request\.head\./),
+      message: "This workflow combines pull_request_target with PR-head checkout or execution, which can run attacker-controlled code with elevated repository context.",
+      suggestedAction: "Do not use PR-head refs in pull_request_target workflows; separate trusted metadata handling from untrusted code execution.",
       confidence: "high"
     }));
   }
@@ -270,21 +583,34 @@ function scanWorkflowFile(file: string, content: string): GithubMetadataFinding[
 function scanDependabotFile(file: string, content: string): GithubMetadataFinding[] {
   const lines = toLines(content);
   const findings: GithubMetadataFinding[] = [];
+  const document = parseDocument(content, {
+    prettyErrors: false,
+    strict: false
+  });
+  const data = document.toJS({ maxAliasCount: 50 }) as unknown;
 
-  lines.forEach((line, index) => {
-    if (/^\s*insecure-external-code-execution\s*:\s*allow\s*$/i.test(line)) {
-      findings.push(createFinding(file, index + 1, {
+  if (!isObject(data)) {
+    return findings;
+  }
+
+  for (const updateEntry of asArray(data.updates)) {
+    if (!isObject(updateEntry)) {
+      continue;
+    }
+
+    if (updateEntry["insecure-external-code-execution"] === "allow") {
+      findings.push(createFinding(file, findLineNumber(lines, /^\s*insecure-external-code-execution\s*:\s*allow\s*$/i), {
         id: "WG-GHDB-001",
         severity: "high",
         category: "dependabot-execution",
         reason: "dependabot allows insecure external code execution",
-        evidence: line.trim(),
+        evidence: "insecure-external-code-execution: allow",
         message: "Dependabot is configured to allow insecure external code execution.",
         suggestedAction: "Disable insecure-external-code-execution unless there is a narrowly justified and documented need.",
         confidence: "high"
       }));
     }
-  });
+  }
 
   return findings;
 }

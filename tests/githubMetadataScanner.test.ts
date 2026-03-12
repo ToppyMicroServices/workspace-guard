@@ -127,4 +127,57 @@ jobs:
     expect(result.findings).toEqual([]);
     expect(formatGithubMetadataScanResult(result)).toContain("No .github findings");
   });
+
+  it("flags workflows without explicit permissions", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/unpinned-perms.yml", `name: unpinned permissions
+on:
+  push:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - run: npm test
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-010",
+        severity: "info"
+      })
+    ]));
+  });
+
+  it("flags reusable workflow secret inheritance and untrusted interpolation", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/reusable-risk.yml", `name: reusable risk
+on:
+  workflow_dispatch:
+jobs:
+  call-other:
+    uses: vendor/reusable/.github/workflows/deploy.yml@main
+    secrets: inherit
+  shell-risk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: echo "\${{ github.event.pull_request.title }}"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const findingIds = result.findings.map((finding) => finding.id);
+
+    expect(findingIds).toEqual(expect.arrayContaining([
+      "WG-GHWF-004",
+      "WG-GHWF-011",
+      "WG-GHWF-012",
+      "WG-GHWF-015"
+    ]));
+  });
 });
