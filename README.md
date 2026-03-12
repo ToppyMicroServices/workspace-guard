@@ -1,5 +1,7 @@
 # HomeGuard
 
+![HomeGuard icon](./assets/homeguard-icon.svg)
+
 HomeGuard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
 
 - Path-risk evaluation for home and high-risk folders
