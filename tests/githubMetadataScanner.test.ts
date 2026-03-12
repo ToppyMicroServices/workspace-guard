@@ -300,6 +300,39 @@ jobs:
     ]));
   });
 
+  it("tracks tainted values across needs job outputs", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".github/workflows/needs-output.yml", `name: needs output
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      payload: \${{ steps.prepare.outputs.payload }}
+    steps:
+      - id: prepare
+        run: echo "payload=\${{ github.event.pull_request.title }}" >> "$GITHUB_OUTPUT"
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash -c "\${{ needs.build.outputs.payload }}"
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-011",
+        file: ".github/workflows/needs-output.yml"
+      })
+    ]));
+  });
+
   it("scans local reusable workflow files that are invoked by caller workflows", async () => {
     const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
     tempDirs.push(rootPath);
@@ -415,5 +448,61 @@ jobs:
     ));
 
     expect(reusableWorkflowInputFindings).toEqual([]);
+  });
+
+  it("resolves external reusable workflows when opt-in resolver is enabled", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    const externalReference = "vendor/reusable/.github/workflows/deploy.yml@0123456789abcdef0123456789abcdef01234567";
+    await writeRepoFile(rootPath, ".github/workflows/caller.yml", `name: caller
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    uses: ${externalReference}
+    with:
+      script_body: \${{ github.event.pull_request.body }}
+`);
+
+    const result = await scanGithubMetadata(rootPath, {
+      resolveExternalWorkflows: true,
+      externalWorkflowResolver: {
+        resolve: async (reference) => {
+          if (reference !== externalReference) {
+            return undefined;
+          }
+
+          return {
+            file: `external:${reference}`,
+            content: `name: deploy
+on:
+  workflow_call:
+    inputs:
+      script_body:
+        required: true
+        type: string
+jobs:
+  dangerous:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: bash -c "\${{ inputs.script_body }}"
+`
+          };
+        }
+      }
+    });
+
+    expect(result.scannedFiles).toContain(`external:${externalReference}`);
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-GHWF-011",
+        file: `external:${externalReference}`
+      })
+    ]));
+    expect(result.findings.some((finding) => finding.id === "WG-GHWF-017")).toBe(false);
   });
 });

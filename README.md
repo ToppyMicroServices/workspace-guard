@@ -72,13 +72,15 @@ Use the scanner to review high-risk repository metadata before enabling Actions 
 ```bash
 npm run build
 npx workspace-guard-scan .
+npx workspace-guard-scan --resolve-external-workflows .
 ```
 
 Current `.github` rules cover:
 
 - `.github/workflows/*.yml`: `pull_request_target`, broad `permissions`, unpinned `uses`, dangerous `run`, `self-hosted`, and PR-head checkout in privileged workflows
-- `.github/workflows/*.yml`: `docker://` actions without digest pin, external reusable workflows, `secrets: inherit`, scheduled/manual triggers, tainted `workflow_dispatch` inputs, tainted `env` values consumed by `run`, tainted values propagated via `$GITHUB_ENV` / `$GITHUB_OUTPUT`, and untrusted expressions flowing into shell execution or execution-sensitive `with:` inputs
+- `.github/workflows/*.yml`: `docker://` actions without digest pin, external reusable workflows, `secrets: inherit`, scheduled/manual triggers, tainted `workflow_dispatch` inputs, tainted `env` values consumed by `run`, tainted values propagated via `$GITHUB_ENV` / `$GITHUB_OUTPUT`, tainted `needs.<job>.outputs.*`, and untrusted expressions flowing into shell execution or execution-sensitive `with:` inputs
 - Local reusable workflows: caller-supplied tainted `with:` values are followed into callee `workflow_call` inputs so sink findings appear on the reusable workflow file, while constant caller inputs do not trigger extra findings
+- External reusable workflows: optional `--resolve-external-workflows` fetches and scans referenced reusable workflows, and suppresses the “contents not local” finding when the callee was resolved successfully
 - `.github/dependabot.yml`: `insecure-external-code-execution: allow`
 - `.github/CODEOWNERS`: repository-wide catch-all review routing entries
 - `.github/ISSUE_TEMPLATE/*` and `PULL_REQUEST_TEMPLATE*`: secret requests and risky shell instructions

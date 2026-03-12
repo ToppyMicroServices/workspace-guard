@@ -5,8 +5,12 @@ import path from "node:path";
 import { formatGithubMetadataScanResult, scanGithubMetadata } from "./core/githubMetadataScanner";
 
 async function main(argv: string[]): Promise<number> {
-  const targetPath = path.resolve(argv[0] ?? ".");
-  const result = await scanGithubMetadata(targetPath);
+  const resolveExternalWorkflows = argv.includes("--resolve-external-workflows");
+  const targetArgument = argv.find((value) => value !== "--resolve-external-workflows");
+  const targetPath = path.resolve(targetArgument ?? ".");
+  const result = await scanGithubMetadata(targetPath, {
+    resolveExternalWorkflows
+  });
   process.stdout.write(`${formatGithubMetadataScanResult(result)}\n`);
 
   return result.findings.some((finding) => finding.severity !== "info") ? 1 : 0;
