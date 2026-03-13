@@ -8,6 +8,8 @@ Workspace Guard is a TypeScript library and CLI for reducing the risk of opening
 - Extension-host helpers for workspace detection and guarded actions
 - Telemetry hardening helpers with rollback support
 
+Workspace Guard is privacy-first and offline-first by default. Installing and using the library, CLI, and extension does not send telemetry, phone home, or require remote access. The only networked behavior is the scanner's explicit opt-in `--resolve-external-workflows` mode, which fetches referenced reusable workflows so they can be inspected locally.
+
 ## TL;DR
 
 - Use `homeguard-code` to stop accidental `~` opens in VS Code
