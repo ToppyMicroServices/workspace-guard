@@ -13,7 +13,7 @@ Why this matters:
 Workspace Guard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
 
 - Path-risk evaluation for home and high-risk folders
-- A `homeguard-code` wrapper around the `code` CLI
+- A safety wrapper around the VS Code `code` CLI
 - A `.github` scanner for GitHub workflow and repository-metadata risks
 - Extension-host helpers for workspace detection and guarded actions
 - Telemetry hardening helpers with rollback support
