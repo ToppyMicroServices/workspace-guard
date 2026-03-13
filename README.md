@@ -5,6 +5,11 @@
 - Use `homeguard-code` to stop accidental `~` opens in VS Code
 - Use `workspace-guard-scan` to review `.github` automation risk before trusting a repo
 
+Why this matters:
+
+- Accidentally opening your home directory in VS Code can expose secrets, dotfiles, cloud credentials, and unrelated personal files to search, edit, Git, and extension activity.
+- Risky `.github` files can turn a harmless-looking repository into one that runs dangerous automation, weakens review flow, or pushes maintainers toward unsafe actions.
+
 Workspace Guard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
 
 - Path-risk evaluation for home and high-risk folders
