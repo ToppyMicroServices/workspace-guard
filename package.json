@@ -4,21 +4,33 @@
   "private": true,
   "displayName": "Workspace Guard",
   "publisher": "ToppyMicroServices",
-  "description": "Guard risky VS Code workspaces such as your home directory and high-risk folders.",
+  "description": "Warn before VS Code opens your home directory or other high-risk folders, and offer privacy hardening for telemetry-related settings.",
   "icon": "assets/workspace-guard-icon.png",
   "main": "./dist/src/vscodeExtension.js",
   "engines": {
     "vscode": "^1.110.0"
   },
   "categories": [
+    "Extension Tools",
     "Other"
   ],
+  "galleryBanner": {
+    "color": "#0f1724",
+    "theme": "dark"
+  },
   "keywords": [
     "vscode",
     "workspace",
     "security",
     "privacy",
-    "telemetry"
+    "telemetry",
+    "home directory",
+    "github actions",
+    "workflow security",
+    "offline-first"
+  ],
+  "extensionKind": [
+    "workspace"
   ],
   "activationEvents": [
     "onStartupFinished",
