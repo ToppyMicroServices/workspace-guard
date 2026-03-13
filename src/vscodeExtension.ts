@@ -14,6 +14,7 @@ import {
 } from "./extension/homeguardExtension";
 
 const LAST_BACKUP_PATH_KEY = "homeguard.lastTelemetryBackupPath";
+const ONBOARDING_COMPLETED_KEY = "homeguard.onboardingCompleted";
 
 class VSCodeSettingsStore implements SettingsStore {
   private readonly keys: readonly string[];
@@ -186,6 +187,19 @@ function updateProtectionStatusBarItem(statusBarItem: vscode.StatusBarItem): voi
   statusBarItem.show();
 }
 
+function hasExplicitProtectionPreference(): boolean {
+  const configuration = vscode.workspace.getConfiguration("homeguard");
+  const enableInspection = configuration.inspect<boolean>("enable");
+  const modeInspection = configuration.inspect<HomeguardMode>("mode");
+
+  return (
+    enableInspection?.globalValue !== undefined
+    || enableInspection?.workspaceValue !== undefined
+    || modeInspection?.globalValue !== undefined
+    || modeInspection?.workspaceValue !== undefined
+  );
+}
+
 async function pickProtectionMode(
   currentEnabled: boolean,
   currentMode: HomeguardMode
@@ -231,6 +245,40 @@ async function pickProtectionMode(
   );
 
   return selection ? { enable: selection.enable, mode: selection.mode } : undefined;
+}
+
+async function applyProtectionSelection(
+  selection: { enable: boolean; mode: HomeguardMode },
+  statusBarItem: vscode.StatusBarItem
+): Promise<void> {
+  const configuration = vscode.workspace.getConfiguration("homeguard");
+  await configuration.update("enable", selection.enable, vscode.ConfigurationTarget.Global);
+  await configuration.update("mode", selection.mode, vscode.ConfigurationTarget.Global);
+  updateProtectionStatusBarItem(statusBarItem);
+}
+
+async function maybeRunInitialOnboarding(
+  context: vscode.ExtensionContext,
+  statusBarItem: vscode.StatusBarItem
+): Promise<void> {
+  if (context.globalState.get<boolean>(ONBOARDING_COMPLETED_KEY)) {
+    return;
+  }
+
+  if (hasExplicitProtectionPreference()) {
+    await context.globalState.update(ONBOARDING_COMPLETED_KEY, true);
+    return;
+  }
+
+  const selection = await pickProtectionMode(true, "redirect");
+  if (selection) {
+    await applyProtectionSelection(selection, statusBarItem);
+    await vscode.window.showInformationMessage(
+      `Workspace Guard protection is now ${formatProtectionState(selection.enable, selection.mode)}. You can change this later from the status bar.`
+    );
+  }
+
+  await context.globalState.update(ONBOARDING_COMPLETED_KEY, true);
 }
 
 async function ensureBackupDir(context: vscode.ExtensionContext): Promise<string> {
@@ -297,9 +345,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    await configuration.update("enable", selection.enable, vscode.ConfigurationTarget.Global);
-    await configuration.update("mode", selection.mode, vscode.ConfigurationTarget.Global);
-    updateProtectionStatusBarItem(protectionStatusBarItem);
+    await applyProtectionSelection(selection, protectionStatusBarItem);
     await vscode.window.showInformationMessage(`Workspace Guard protection is now ${formatProtectionState(selection.enable, selection.mode)}.`);
   }));
 
@@ -360,6 +406,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activation.dispose();
     activation = await activateHomeguardExtension(host, getHomeguardSettings());
   }));
+
+  await maybeRunInitialOnboarding(context, protectionStatusBarItem);
 }
 
 export function deactivate(): void {
