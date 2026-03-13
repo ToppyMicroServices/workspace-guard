@@ -45,4 +45,6 @@ It currently looks for:
 
 If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it performs a network fetch for the referenced workflow files.
 
+Disclaimer: Workspace Guard reduces common VS Code workspace and repository-trust mistakes, but it is not a sandbox, malware scanner, or guarantee against all unsafe repositories, extensions, or user actions.
+
 © 2026 ToppyMicroServices OÜ — Registry code 16551297 — Tallinn, Estonia.

@@ -4,6 +4,7 @@
   "private": true,
   "displayName": "Workspace Guard",
   "publisher": "ToppyMicroServices",
+  "license": "Apache-2.0",
   "description": "Warn before VS Code opens your home directory or other high-risk folders, and offer privacy hardening for telemetry-related settings.",
   "icon": "assets/workspace-guard-icon.png",
   "main": "./dist/src/vscodeExtension.js",
@@ -212,6 +213,7 @@
   },
   "files": [
     "dist/src/**",
+    "LICENSE",
     "README.md",
     "assets/workspace-guard-icon.png"
   ],
