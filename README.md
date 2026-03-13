@@ -22,13 +22,9 @@ Workspace Guard is privacy-first and offline-first by default. Installing and us
 
 ## Quick Start
 
-```bash
-npm install
-npm run build
-npm test
-npx homeguard-code ~
-npx workspace-guard-scan .
-```
+1. Install Workspace Guard in VS Code.
+2. Leave the default `Redirect` mode on, or change it from the `WG:` status bar control.
+3. If you want to inspect a repository's automation risk, run `workspace-guard-scan` against that repository.
 
 ## Project Layout
 
@@ -62,7 +58,6 @@ Core CLI behaviors:
 Use the scanner to review high-risk repository metadata before enabling Actions or trusting repository automation:
 
 ```bash
-npm run build
 npx workspace-guard-scan .
 npx workspace-guard-scan --resolve-external-workflows .
 ```
