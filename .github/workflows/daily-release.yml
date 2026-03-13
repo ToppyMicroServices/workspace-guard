@@ -40,6 +40,15 @@ jobs:
       - name: Package extension
         run: npm run package:extension -- --out workspace-guard.vsix
 
+      - name: Verify publish secret
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT secret is required to publish to the VS Code Marketplace." >&2
+            exit 1
+          fi
+
       - name: Collect CodeQL alerts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,3 +130,8 @@ jobs:
           TAG: ${{ steps.summary.outputs.tag }}
         run: |
           gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json daily-release-notes.md --clobber
+
+      - name: Publish daily pre-release to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npm run publish:extension -- --packagePath workspace-guard.vsix --pre-release
