@@ -1,0 +1,123 @@
+name: Daily Release
+
+on:
+  schedule:
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  security-events: read
+
+concurrency:
+  group: daily-release
+  cancel-in-progress: false
+
+jobs:
+  daily-prerelease:
+    name: Build Daily Prerelease
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Package extension
+        run: npm run package:extension -- --out workspace-guard.vsix
+
+      - name: Collect CodeQL alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&state=open&per_page=100" > codeql-alerts.json
+
+      - name: Build daily summary
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          TAG="daily-$(date -u +%Y-%m-%d)"
+          {
+            echo "# Daily Workspace Guard prerelease"
+            echo
+            echo "- Repository: ${REPOSITORY}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Generated (UTC): $(date -u +'%Y-%m-%d %H:%M:%S')"
+            echo
+            echo "## CodeQL"
+          } > daily-release-notes.md
+
+          TOTAL=$(jq 'length' codeql-alerts.json)
+          HIGH=$(jq '[.[] | select(.rule.severity == "error" or .rule.severity == "high")] | length' codeql-alerts.json)
+          MEDIUM=$(jq '[.[] | select(.rule.severity == "warning" or .rule.severity == "medium")] | length' codeql-alerts.json)
+          LOW=$(jq '[.[] | select(.rule.severity == "note" or .rule.severity == "low")] | length' codeql-alerts.json)
+
+          {
+            echo "- Open alerts: ${TOTAL}"
+            echo "- High: ${HIGH}"
+            echo "- Medium: ${MEDIUM}"
+            echo "- Low: ${LOW}"
+            echo
+          } >> daily-release-notes.md
+
+          if [ "${TOTAL}" -eq 0 ]; then
+            echo "No open CodeQL alerts." >> daily-release-notes.md
+          else
+            {
+              echo "### Open alerts"
+              jq -r '
+                .[:20]
+                | .[]
+                | "- [\(.rule.id)] \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line) (\(.rule.severity // "unknown"))"
+              ' codeql-alerts.json
+            } >> daily-release-notes.md
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "title=Daily Prerelease ${TAG#daily-}"
+          } >> "${GITHUB_OUTPUT}"
+        id: summary
+
+      - name: Create or update daily prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.summary.outputs.tag }}
+          TITLE: ${{ steps.summary.outputs.title }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" \
+              --title "${TITLE}" \
+              --notes-file daily-release-notes.md \
+              --prerelease
+          else
+            gh release create "${TAG}" \
+              --title "${TITLE}" \
+              --notes-file daily-release-notes.md \
+              --prerelease
+          fi
+
+      - name: Upload daily assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.summary.outputs.tag }}
+        run: |
+          gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json daily-release-notes.md --clobber
