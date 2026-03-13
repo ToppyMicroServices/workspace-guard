@@ -8,6 +8,22 @@ Workspace Guard is a TypeScript library and CLI for reducing the risk of opening
 - Extension-host helpers for workspace detection and guarded actions
 - Telemetry hardening helpers with rollback support
 
+## TL;DR
+
+- Use `homeguard-code` to stop accidental `~` opens in VS Code
+- Use `workspace-guard-scan` to review `.github` automation risk before trusting a repo
+- Publish the extension through the GitHub `Release Extension` workflow with `VSCE_PAT`
+
+## Quick Start
+
+```bash
+npm install
+npm run build
+npm test
+npx homeguard-code ~
+npx workspace-guard-scan .
+```
+
 ## Project Layout
 
 - `src/core/pathPolicy.ts`: path expansion, normalization, `realpath`, and risk classification
@@ -17,24 +33,6 @@ Workspace Guard is a TypeScript library and CLI for reducing the risk of opening
 - `src/extension/workspaceSafetyGuard.ts`: action-level guards for save/git/terminal/task/publish
 - `src/core/telemetry.ts`: telemetry audit and hardening profile
 - `src/core/settingsBackup.ts`: settings backup and rollback
-
-## Install
-
-```bash
-npm install
-```
-
-## Build
-
-```bash
-npm run build
-```
-
-## Test
-
-```bash
-npm test
-```
 
 ## CI
 
