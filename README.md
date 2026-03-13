@@ -134,3 +134,5 @@ Based on the current code, there is no obvious memory leak path as long as exten
 
 - `spec.md`
 - `workspace-guard-spec-v0.2.md`
+
+© 2026 ToppyMicroServices OÜ — Registry code 16551297 — Tallinn, Estonia.
