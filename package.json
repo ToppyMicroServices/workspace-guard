@@ -1,10 +1,10 @@
 {
   "name": "workspace-guard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
-  "displayName": "HomeGuard",
+  "displayName": "Workspace Guard",
   "publisher": "ToppyMicroServices",
-  "description": "Protect against accidentally opening the home directory in VS Code.",
+  "description": "Guard risky VS Code workspaces such as your home directory and high-risk folders.",
   "main": "./dist/src/vscodeExtension.js",
   "engines": {
     "vscode": "^1.110.0"
@@ -33,41 +33,41 @@
       {
         "command": "homeguard.openEscapeFolder",
         "title": "Open Escape Folder",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       },
       {
         "command": "homeguard.removeHomeFoldersFromWorkspace",
         "title": "Remove Home Folders From Workspace",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       },
       {
         "command": "homeguard.auditTelemetry",
         "title": "Audit Telemetry Settings",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       },
       {
         "command": "homeguard.applyPrivacyHardening",
         "title": "Apply Privacy Hardening",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       },
       {
         "command": "homeguard.rollbackPrivacyHardening",
         "title": "Roll Back Privacy Hardening",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       },
       {
         "command": "homeguard.assessWorkspaceSafety",
         "title": "Assess Workspace Safety",
-        "category": "HomeGuard"
+        "category": "Workspace Guard"
       }
     ],
     "configuration": {
-      "title": "HomeGuard",
+      "title": "Workspace Guard",
       "properties": {
         "homeguard.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable HomeGuard protections."
+          "description": "Enable Workspace Guard protections."
         },
         "homeguard.mode": {
           "type": "string",
@@ -83,7 +83,7 @@
         "homeguard.escapeFolder": {
           "type": "string",
           "default": "~/work/_escape",
-          "description": "Path to the Escape Folder opened when HomeGuard redirects."
+          "description": "Path to the Escape Folder opened when Workspace Guard redirects."
         },
         "homeguard.enableEphemeralEscape": {
           "type": "boolean",
@@ -128,7 +128,7 @@
         "homeguard.verbose": {
           "type": "boolean",
           "default": false,
-          "description": "Enable verbose HomeGuard output logging."
+          "description": "Enable verbose Workspace Guard output logging."
         },
         "homeguard.privacy.auditOnStartup": {
           "type": "boolean",
@@ -138,7 +138,7 @@
         "homeguard.privacy.offerHardening": {
           "type": "boolean",
           "default": true,
-          "description": "Offer privacy hardening commands in the HomeGuard workflow."
+          "description": "Offer privacy hardening commands in the Workspace Guard workflow."
         },
         "homeguard.privacy.backupBeforeApply": {
           "type": "boolean",

@@ -135,15 +135,15 @@ function createHost(outputChannel: vscode.OutputChannel): HomeguardExtensionHost
 
 function formatTelemetrySummary(actionableChanges: number): string {
   if (actionableChanges === 0) {
-    return "HomeGuard found no telemetry settings that need hardening.";
+    return "Workspace Guard found no telemetry settings that need hardening.";
   }
 
-  return `HomeGuard found ${actionableChanges} telemetry setting${actionableChanges === 1 ? "" : "s"} that can be hardened.`;
+  return `Workspace Guard found ${actionableChanges} telemetry setting${actionableChanges === 1 ? "" : "s"} that can be hardened.`;
 }
 
 function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<typeof createHomeguardCommandHandlers>["assessWorkspaceSafety"]>>): string {
   if (assessment.classification === "safe") {
-    return "HomeGuard considers the current workspace safe.";
+    return "Workspace Guard considers the current workspace safe.";
   }
 
   const parts = [
@@ -151,7 +151,7 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
     `Home folders: ${assessment.homeFolders.length}`,
     `High-risk folders: ${assessment.highRiskFolders.length}`
   ];
-  return `HomeGuard workspace safety assessment. ${parts.join(" | ")}`;
+  return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
 }
 
 async function ensureBackupDir(context: vscode.ExtensionContext): Promise<string> {
@@ -174,14 +174,14 @@ async function pickBackupPath(context: vscode.ExtensionContext): Promise<string 
     filters: {
       JSON: ["json"]
     },
-    openLabel: "Select HomeGuard backup"
+    openLabel: "Select Workspace Guard backup"
   });
 
   return selected?.[0]?.fsPath;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const outputChannel = vscode.window.createOutputChannel("HomeGuard");
+  const outputChannel = vscode.window.createOutputChannel("Workspace Guard");
   context.subscriptions.push(outputChannel);
 
   const host = createHost(outputChannel);
@@ -196,12 +196,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
     const targetPath = await commands.openEscapeFolder();
-    await vscode.window.showInformationMessage(`HomeGuard opened the Escape Folder at ${targetPath}.`);
+    await vscode.window.showInformationMessage(`Workspace Guard opened the Escape Folder at ${targetPath}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.removeHomeFoldersFromWorkspace", async () => {
     const removedCount = await commands.removeHomeFoldersFromWorkspace();
-    await vscode.window.showInformationMessage(`HomeGuard removed ${removedCount} home folder${removedCount === 1 ? "" : "s"} from the workspace.`);
+    await vscode.window.showInformationMessage(`Workspace Guard removed ${removedCount} home folder${removedCount === 1 ? "" : "s"} from the workspace.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.auditTelemetry", async () => {
@@ -220,19 +220,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await context.globalState.update(LAST_BACKUP_PATH_KEY, result.backupPath);
     }
 
-    await vscode.window.showInformationMessage(`HomeGuard applied ${result.applied.length} privacy hardening change${result.applied.length === 1 ? "" : "s"}.`);
+    await vscode.window.showInformationMessage(`Workspace Guard applied ${result.applied.length} privacy hardening change${result.applied.length === 1 ? "" : "s"}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.rollbackPrivacyHardening", async () => {
     const backupPath = await pickBackupPath(context);
     if (!backupPath) {
-      await vscode.window.showWarningMessage("HomeGuard could not find a backup to roll back.");
+      await vscode.window.showWarningMessage("Workspace Guard could not find a backup to roll back.");
       return;
     }
 
     await commands.rollbackPrivacyHardening(backupPath);
     await context.globalState.update(LAST_BACKUP_PATH_KEY, undefined);
-    await vscode.window.showInformationMessage("HomeGuard rolled back the last privacy hardening backup.");
+    await vscode.window.showInformationMessage("Workspace Guard rolled back the last privacy hardening backup.");
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.assessWorkspaceSafety", async () => {

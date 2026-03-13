@@ -1,6 +1,6 @@
-# HomeGuard
+# Workspace Guard
 
-HomeGuard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
+Workspace Guard is a TypeScript library and CLI for reducing the risk of opening your entire home directory in VS Code. It provides:
 
 - Path-risk evaluation for home and high-risk folders
 - A `homeguard-code` wrapper around the `code` CLI
