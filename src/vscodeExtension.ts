@@ -167,38 +167,70 @@ function formatModeLabel(mode: HomeguardMode): string {
   }
 }
 
-async function pickProtectionMode(currentMode: HomeguardMode): Promise<HomeguardMode | undefined> {
+function formatProtectionState(enabled: boolean, mode: HomeguardMode): string {
+  if (!enabled) {
+    return "Off";
+  }
+
+  return formatModeLabel(mode);
+}
+
+function updateProtectionStatusBarItem(statusBarItem: vscode.StatusBarItem): void {
+  const configuration = vscode.workspace.getConfiguration("homeguard");
+  const enabled = configuration.get<boolean>("enable", true);
+  const mode = configuration.get<HomeguardMode>("mode", "redirect");
+  const stateLabel = formatProtectionState(enabled, mode);
+
+  statusBarItem.text = `$(shield) WG: ${stateLabel}`;
+  statusBarItem.tooltip = `Workspace Guard protection is ${stateLabel}. Click to change the protection mode.`;
+  statusBarItem.show();
+}
+
+async function pickProtectionMode(
+  currentEnabled: boolean,
+  currentMode: HomeguardMode
+): Promise<{ enable: boolean; mode: HomeguardMode } | undefined> {
   const selection = await vscode.window.showQuickPick(
     [
+      {
+        label: "Off",
+        detail: "Disable Workspace Guard protections.",
+        enable: false,
+        mode: currentMode
+      },
       {
         label: "Redirect",
         description: "Recommended",
         detail: "Remove the home directory from the workspace and open the Escape Folder instead.",
+        enable: true,
         mode: "redirect" as HomeguardMode
       },
       {
         label: "Warn",
         detail: "Show a warning and let you decide whether to keep the folder open.",
+        enable: true,
         mode: "warn" as HomeguardMode
       },
       {
         label: "Block",
         detail: "Remove the home directory from the workspace unless you explicitly open the Escape Folder.",
+        enable: true,
         mode: "block" as HomeguardMode
       },
       {
         label: "Audit Only",
         detail: "Log detections without changing the workspace.",
+        enable: true,
         mode: "audit-only" as HomeguardMode
       }
     ],
     {
       title: "Workspace Guard Protection Mode",
-      placeHolder: `Current mode: ${formatModeLabel(currentMode)}`
+      placeHolder: `Current mode: ${formatProtectionState(currentEnabled, currentMode)}`
     }
   );
 
-  return selection?.mode;
+  return selection ? { enable: selection.enable, mode: selection.mode } : undefined;
 }
 
 async function ensureBackupDir(context: vscode.ExtensionContext): Promise<string> {
@@ -232,38 +264,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(outputChannel);
 
   const host = createHost(outputChannel);
-  const activation = await activateHomeguardExtension(host, getHomeguardSettings());
-  context.subscriptions.push({ dispose: () => activation.dispose() });
+  let activation = await activateHomeguardExtension(host, getHomeguardSettings());
+  context.subscriptions.push({
+    dispose: () => activation.dispose()
+  });
+
+  const protectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  protectionStatusBarItem.command = "homeguard.setMode";
+  updateProtectionStatusBarItem(protectionStatusBarItem);
+  context.subscriptions.push(protectionStatusBarItem);
 
   if (activation.telemetryReport) {
     void vscode.window.showInformationMessage(formatTelemetrySummary(activation.telemetryReport.actionableChanges.length));
   }
 
-  const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
-
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const targetPath = await commands.openEscapeFolder();
     await vscode.window.showInformationMessage(`Workspace Guard opened the Escape Folder at ${targetPath}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.setMode", async () => {
     const configuration = vscode.workspace.getConfiguration("homeguard");
+    const currentEnabled = configuration.get<boolean>("enable", true);
     const currentMode = configuration.get<HomeguardMode>("mode", "redirect");
-    const selectedMode = await pickProtectionMode(currentMode);
-    if (!selectedMode || selectedMode === currentMode) {
+    const selection = await pickProtectionMode(currentEnabled, currentMode);
+    if (!selection) {
       return;
     }
 
-    await configuration.update("mode", selectedMode, vscode.ConfigurationTarget.Global);
-    await vscode.window.showInformationMessage(`Workspace Guard protection mode set to ${formatModeLabel(selectedMode)}.`);
+    if (selection.enable === currentEnabled && selection.mode === currentMode) {
+      return;
+    }
+
+    await configuration.update("enable", selection.enable, vscode.ConfigurationTarget.Global);
+    await configuration.update("mode", selection.mode, vscode.ConfigurationTarget.Global);
+    updateProtectionStatusBarItem(protectionStatusBarItem);
+    await vscode.window.showInformationMessage(`Workspace Guard protection is now ${formatProtectionState(selection.enable, selection.mode)}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.removeHomeFoldersFromWorkspace", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const removedCount = await commands.removeHomeFoldersFromWorkspace();
     await vscode.window.showInformationMessage(`Workspace Guard removed ${removedCount} home folder${removedCount === 1 ? "" : "s"} from the workspace.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.auditTelemetry", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const report = commands.auditTelemetry();
     outputChannel.appendLine(formatTelemetrySummary(report.actionableChanges.length));
     for (const item of report.settings) {
@@ -274,6 +321,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.applyPrivacyHardening", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const result = await commands.applyPrivacyHardening(await ensureBackupDir(context));
     if (result.backupPath) {
       await context.globalState.update(LAST_BACKUP_PATH_KEY, result.backupPath);
@@ -283,6 +331,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.rollbackPrivacyHardening", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const backupPath = await pickBackupPath(context);
     if (!backupPath) {
       await vscode.window.showWarningMessage("Workspace Guard could not find a backup to roll back.");
@@ -295,10 +344,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.assessWorkspaceSafety", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const assessment = await commands.assessWorkspaceSafety();
     outputChannel.appendLine(formatWorkspaceSafetyMessage(assessment));
     outputChannel.show(true);
     await vscode.window.showInformationMessage(formatWorkspaceSafetyMessage(assessment));
+  }));
+
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
+    if (!event.affectsConfiguration("homeguard")) {
+      return;
+    }
+
+    updateProtectionStatusBarItem(protectionStatusBarItem);
+    activation.dispose();
+    activation = await activateHomeguardExtension(host, getHomeguardSettings());
   }));
 }
 
