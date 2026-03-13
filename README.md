@@ -14,7 +14,6 @@ Workspace Guard is privacy-first and offline-first by default. Installing and us
 
 - Use `homeguard-code` to stop accidental `~` opens in VS Code
 - Use `workspace-guard-scan` to review `.github` automation risk before trusting a repo
-- Publish the extension through the GitHub `Release Extension` workflow with `VSCE_PAT`
 
 ## Quick Start
 
@@ -35,19 +34,6 @@ npx workspace-guard-scan .
 - `src/extension/workspaceSafetyGuard.ts`: action-level guards for save/git/terminal/task/publish
 - `src/core/telemetry.ts`: telemetry audit and hardening profile
 - `src/core/settingsBackup.ts`: settings backup and rollback
-
-## CI
-
-GitHub Actions runs three workflows:
-
-- `Build`: `npm ci`, `npm test`, and `npm run build` on Linux, macOS, and Windows
-- `Security`: weekly and on-change `npm audit --audit-level=high`
-- `CodeQL`: weekly and on-change static analysis for JavaScript/TypeScript
-- `Release Extension`: on GitHub release publish, package a VSIX, publish to the VS Code Marketplace, and attach the VSIX to the release
-
-OS-specific checks are enabled because this project has explicit platform-aware path handling for POSIX and Windows behavior.
-
-To publish from GitHub Actions, configure the `VSCE_PAT` repository secret with a Visual Studio Marketplace personal access token for the `ToppyMicroServices` publisher.
 
 ## CLI Usage
 
@@ -130,7 +116,6 @@ Based on the current code, there is no obvious memory leak path as long as exten
 
 - Risk heuristics are intentionally conservative and regex-based for commands such as `rm -rf`, `git add -A`, and `npm publish`.
 - Settings rollback depends on the store honoring `update(key, undefined)` as an unset operation.
-- Marketplace publishing depends on the `ToppyMicroServices` publisher existing in the Visual Studio Marketplace and the `VSCE_PAT` secret being configured in GitHub Actions.
 
 ## Related Docs
 
