@@ -66,10 +66,10 @@ The scanner is meant to answer a simple question before you trust a repository: 
 
 It currently looks for:
 
-- Dangerous GitHub Actions setups, such as privileged PR workflows, broad write permissions, self-hosted runners, risky shell commands, and third-party actions that are not pinned tightly enough
-- Hidden or indirect execution paths, such as reusable workflows, `docker://` actions, `secrets: inherit`, scheduled/manual triggers, and untrusted values that flow into `run` steps or execution-related inputs
-- Repository automation settings that weaken review or dependency safety, such as risky `dependabot.yml` options and catch-all `CODEOWNERS` rules
-- Social-engineering prompts in issue and pull request templates, such as asking contributors to paste secrets or run dangerous commands
+- GitHub Actions that can execute dangerous code, publish with too much power, or trust untrusted pull request input
+- Indirect execution paths that are easy to miss, such as reusable workflows, container-based actions, and values that flow into shell execution
+- Repository settings that weaken dependency safety or review flow, such as risky Dependabot options and overly broad `CODEOWNERS`
+- Issue and pull request templates that push contributors toward unsafe commands or secret disclosure
 
 If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it performs a network fetch for the referenced workflow files.
 
