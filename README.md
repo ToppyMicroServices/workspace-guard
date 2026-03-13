@@ -2,6 +2,8 @@
 
 Prevent accidental home-directory opens in VS Code and review risky `.github` automation before trusting a repository.
 
+Privacy-first and offline-first by default: installing and using the extension does not send telemetry, phone home, or require remote access. Only the optional `--resolve-external-workflows` scan mode fetches external workflow files.
+
 ## Quick Start
 
 1. Install Workspace Guard in VS Code.
