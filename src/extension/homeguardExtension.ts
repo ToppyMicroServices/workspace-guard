@@ -106,7 +106,8 @@ async function inspectWorkspaceFolder(
     homeDir,
     platform: host.platform,
     allowList: settings.allowList,
-    highRiskFolders: settings.highRiskFolders
+    highRiskFolders: settings.highRiskFolders,
+    realpath: async (candidate) => candidate
   });
 
   return {

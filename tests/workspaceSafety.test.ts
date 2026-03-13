@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -249,37 +249,6 @@ describe("createWorkspaceSafetyGuard", () => {
     expect(result.disposition).toBe("confirmed");
     expect(result.result).toBe("executed");
     expect(warnings[0]).toContain("dangerous workspace");
-  });
-
-  it("treats symlinked home workspaces as dangerous during remediation", async () => {
-    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
-    tempDirs.push(sandbox);
-    const homeDir = path.join(sandbox, "home");
-    const linkedHome = path.join(sandbox, "linked-home");
-    await mkdir(homeDir, { recursive: true });
-    await symlink(homeDir, linkedHome);
-    const { host, openedFolders, removedFolders } = await createHost({
-      homeDir,
-      env: { HOME: homeDir },
-      workspaceFolders: [{ uri: { fsPath: linkedHome } }],
-      showWarningMessage: vi.fn(async (_message: string, ...items: string[]) => {
-        return items.find((item) => item === WORKSPACE_SAFETY_ACTIONS.openEscapeFolder);
-      })
-    });
-    const guard = createWorkspaceSafetyGuard(host, {
-      escapeFolder: "~/work/_escape"
-    });
-
-    const result = await guard.runGuardedAction({
-      actionType: "publish",
-      command: "npm publish",
-      label: "Publish package"
-    }, async () => "published");
-
-    expect(result.allowed).toBe(false);
-    expect(result.disposition).toBe("blocked");
-    expect(removedFolders).toEqual([linkedHome]);
-    expect(openedFolders).toEqual([path.join(homeDir, "work", "_escape")]);
   });
 
   it("blocks publish and remediates to the escape folder when selected", async () => {

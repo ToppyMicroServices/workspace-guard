@@ -26,9 +26,18 @@ export interface AppliedSettingsResult {
   applied: SettingsMutation[];
 }
 
-interface SettingsBackupPayload {
+interface SettingsBackupFile {
   snapshot: Record<string, unknown>;
-  removedOnRollback: string[];
+  absentKeys?: string[];
+}
+
+function isSettingsBackupFile(value: unknown): value is SettingsBackupFile {
+  if (!value || typeof value !== "object" || !("snapshot" in value)) {
+    return false;
+  }
+
+  const candidate = value as { snapshot: unknown; absentKeys?: unknown };
+  return !!candidate.snapshot && typeof candidate.snapshot === "object" && !Array.isArray(candidate.snapshot);
 }
 
 function buildBackupFileName(timestamp?: string): string {
@@ -38,14 +47,14 @@ function buildBackupFileName(timestamp?: string): string {
 
 export async function createSettingsBackup(
   snapshot: Record<string, unknown>,
-  removedOnRollback: string[],
+  absentKeys: string[],
   options: SettingsBackupOptions
 ): Promise<string> {
   await fs.mkdir(options.backupDir, { recursive: true });
   const backupPath = path.join(options.backupDir, buildBackupFileName(options.timestamp));
-  const payload: SettingsBackupPayload = {
+  const payload: SettingsBackupFile = {
     snapshot,
-    removedOnRollback
+    absentKeys
   };
   await fs.writeFile(backupPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return backupPath;
@@ -63,12 +72,12 @@ export async function applySettingsMutations(
   }
 
   const snapshot = store.getAll();
-  const removedOnRollback = mutations
+  const absentKeys = mutations
     .map((mutation) => mutation.key)
     .filter((key) => !(key in snapshot));
   const backupPath = options.backupBeforeApply === false
     ? undefined
-    : await createSettingsBackup(snapshot, removedOnRollback, options);
+    : await createSettingsBackup(snapshot, absentKeys, options);
 
   for (const mutation of mutations) {
     await store.update(mutation.key, mutation.nextValue);
@@ -85,19 +94,19 @@ export async function rollbackSettingsBackup(
   store: SettingsStore
 ): Promise<void> {
   const contents = await fs.readFile(backupPath, "utf8");
-  const parsed = JSON.parse(contents) as Record<string, unknown>;
-  const snapshot = "snapshot" in parsed
-    ? parsed.snapshot as Record<string, unknown>
-    : parsed;
-  const removedOnRollback = Array.isArray(parsed.removedOnRollback)
-    ? parsed.removedOnRollback.filter((key): key is string => typeof key === "string")
+  const parsed = JSON.parse(contents) as unknown;
+  const snapshot = isSettingsBackupFile(parsed)
+    ? parsed.snapshot
+    : (parsed as Record<string, unknown>);
+  const absentKeys = isSettingsBackupFile(parsed)
+    ? (parsed.absentKeys ?? [])
     : [];
 
   for (const [key, value] of Object.entries(snapshot)) {
     await store.update(key, value);
   }
 
-  for (const key of removedOnRollback) {
+  for (const key of absentKeys) {
     await store.update(key, undefined);
   }
 }

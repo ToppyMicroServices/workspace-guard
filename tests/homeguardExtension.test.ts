@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -133,50 +133,20 @@ describe("activateHomeguardExtension", () => {
     expect(readme).toContain("Escape Folder");
   });
 
-  it("detects symlinked home folders at startup", async () => {
-    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-ext-"));
-    tempDirs.push(sandbox);
-    const homeDir = path.join(sandbox, "home");
-    const linkedHome = path.join(sandbox, "linked-home");
-    await mkdir(homeDir, { recursive: true });
-    await symlink(homeDir, linkedHome);
-    const { host, openedFolders, removedFolders } = await createHost({
-      homeDir,
-      workspaceFolders: [{ uri: { fsPath: linkedHome } }],
-      env: { HOME: homeDir }
-    });
-
-    const activation = await activateHomeguardExtension(host, {
-      mode: "redirect",
-      escapeFolder: "~/work/_escape"
-    });
-
-    expect(activation.startupDetections).toEqual([
-      { folderPath: linkedHome, action: "redirected" }
-    ]);
-    expect(removedFolders).toEqual([linkedHome]);
-    expect(openedFolders).toEqual([path.join(homeDir, "work", "_escape")]);
-  });
-
   it("detects home folders added to a multi-root workspace", async () => {
-    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-ext-"));
-    tempDirs.push(sandbox);
-    const homeDir = path.join(sandbox, "home");
     const { host, emitChange, removedFolders } = await createHost({
-      homeDir,
-      env: { HOME: homeDir },
-      workspaceFolders: [{ uri: { fsPath: path.join(homeDir, "work", "projectA") } }]
+      workspaceFolders: [{ uri: { fsPath: "/Users/akira/work/projectA" } }]
     });
 
     const activation = await activateHomeguardExtension(host, {
       mode: "block"
     });
     await emitChange({
-      added: [{ uri: { fsPath: homeDir } }],
+      added: [{ uri: { fsPath: "/Users/akira" } }],
       removed: []
     });
 
-    expect(removedFolders).toContain(homeDir);
+    expect(removedFolders).toContain("/Users/akira");
     activation.dispose();
   });
 

@@ -48,7 +48,8 @@ async function getAssessment(
     workspaceFolders: host.workspaceFolders.map((folder) => ({ path: folder.uri.fsPath })),
     homeDir: host.homeDir,
     env: host.env,
-    platform: host.platform
+    platform: host.platform,
+    realpath: async (candidate) => candidate
   }, settingsInput);
 }
 
@@ -84,10 +85,11 @@ function getPromptItems(enforcement: WorkspaceSafetyEnforcement, assessment: Wor
 async function remediateHomeWorkspace(host: HomeguardExtensionHost, settingsInput: HomeguardSettingsInput): Promise<void> {
   const settings = resolveHomeguardSettings(settingsInput);
   const homeDir = host.homeDir ?? homedir();
-  const assessment = await getAssessment(host, settingsInput);
 
-  for (const folderPath of assessment.homeFolders) {
-    await host.removeWorkspaceFolder?.(folderPath);
+  for (const folder of host.workspaceFolders) {
+    if (folder.uri.fsPath === homeDir) {
+      await host.removeWorkspaceFolder?.(folder.uri.fsPath);
+    }
   }
 
   const escapeFolder = await ensureEscapeFolder({

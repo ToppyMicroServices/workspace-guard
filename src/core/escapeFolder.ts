@@ -37,17 +37,18 @@ const defaultFs: EscapeFolderFs = {
   }
 };
 
-function sanitizeEphemeralToken(value: string): string {
-  const sanitized = value
+function sanitizeEphemeralSuffix(value: string): string {
+  const collapsed = value
+    .replace(/[:.]/g, "-")
     .replace(/[^A-Za-z0-9_-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-  return sanitized || "session";
+  return collapsed || "session";
 }
 
 function buildEphemeralFolderName(timestamp?: string): string {
-  return `vscode-home-escape-${sanitizeEphemeralToken(timestamp ?? new Date().toISOString())}`;
+  return `vscode-home-escape-${sanitizeEphemeralSuffix(timestamp ?? new Date().toISOString())}`;
 }
 
 export function resolveEscapeFolderPath(options: EscapeFolderOptions): string {

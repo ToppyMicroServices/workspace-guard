@@ -16,7 +16,6 @@ export interface HomeguardCliOptions {
   homeDir?: string;
   platform?: SupportedPlatform;
   codeCommand?: string;
-  now?: () => Date;
   realpath?: (candidate: string) => Promise<string>;
   ensureEscapeFolder?: typeof ensureEscapeFolder;
 }
@@ -35,7 +34,6 @@ export interface CliExecutionPlan {
   shouldWarn: boolean;
   shouldBlock: boolean;
   shouldRedirect: boolean;
-  redirectTimestamp?: string;
   command: string;
   args: string[];
   exitCode: number;
@@ -56,7 +54,6 @@ function getDefaultOptions(options: HomeguardCliOptions): Required<
     homeDir: options.homeDir ?? homedir(),
     platform: options.platform ?? process.platform,
     codeCommand: options.codeCommand ?? "code",
-    now: options.now ?? (() => new Date()),
     escapeFolder: options.escapeFolder ?? DEFAULT_ESCAPE_FOLDER,
     realpath: options.realpath,
     ensureEscapeFolder: options.ensureEscapeFolder
@@ -164,7 +161,6 @@ export async function buildCliExecutionPlan(
       shouldWarn: false,
       shouldBlock: false,
       shouldRedirect: false,
-      redirectTimestamp: undefined,
       command: resolvedOptions.codeCommand,
       args: [...argv],
       exitCode: 0,
@@ -173,16 +169,12 @@ export async function buildCliExecutionPlan(
     };
   }
 
-  const redirectTimestamp = resolvedOptions.enableEphemeralEscape
-    ? resolvedOptions.now().toISOString()
-    : undefined;
   const redirectTarget = resolveEscapeFolderPath({
     escapeFolder: resolvedOptions.escapeFolder,
     enableEphemeralEscape: resolvedOptions.enableEphemeralEscape,
     env: resolvedOptions.env,
     homeDir: resolvedOptions.homeDir,
-    platform: resolvedOptions.platform,
-    timestamp: redirectTimestamp
+    platform: resolvedOptions.platform
   });
   const args = [...argv];
   const shouldRedirect = resolvedOptions.mode === "redirect"
@@ -203,7 +195,6 @@ export async function buildCliExecutionPlan(
     shouldWarn: true,
     shouldBlock,
     shouldRedirect,
-    redirectTimestamp,
     command: resolvedOptions.codeCommand,
     args,
     exitCode: shouldBlock ? 2 : 0,
@@ -242,8 +233,7 @@ export async function runHomeguardCode(
       enableEphemeralEscape: resolvedOptions.enableEphemeralEscape,
       env: resolvedOptions.env,
       homeDir: resolvedOptions.homeDir,
-      platform: resolvedOptions.platform,
-      timestamp: plan.redirectTimestamp
+      platform: resolvedOptions.platform
     });
   }
 
