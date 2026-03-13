@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import * as vscode from "vscode";
 
-import { type HomeguardSettingsInput } from "./core/config";
+import { type HomeguardMode, type HomeguardSettingsInput } from "./core/config";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
 import type { SettingsStore } from "./core/settingsBackup";
 import {
@@ -154,6 +154,53 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
 }
 
+function formatModeLabel(mode: HomeguardMode): string {
+  switch (mode) {
+    case "warn":
+      return "Warn";
+    case "redirect":
+      return "Redirect";
+    case "block":
+      return "Block";
+    case "audit-only":
+      return "Audit Only";
+  }
+}
+
+async function pickProtectionMode(currentMode: HomeguardMode): Promise<HomeguardMode | undefined> {
+  const selection = await vscode.window.showQuickPick(
+    [
+      {
+        label: "Redirect",
+        description: "Recommended",
+        detail: "Remove the home directory from the workspace and open the Escape Folder instead.",
+        mode: "redirect" as HomeguardMode
+      },
+      {
+        label: "Warn",
+        detail: "Show a warning and let you decide whether to keep the folder open.",
+        mode: "warn" as HomeguardMode
+      },
+      {
+        label: "Block",
+        detail: "Remove the home directory from the workspace unless you explicitly open the Escape Folder.",
+        mode: "block" as HomeguardMode
+      },
+      {
+        label: "Audit Only",
+        detail: "Log detections without changing the workspace.",
+        mode: "audit-only" as HomeguardMode
+      }
+    ],
+    {
+      title: "Workspace Guard Protection Mode",
+      placeHolder: `Current mode: ${formatModeLabel(currentMode)}`
+    }
+  );
+
+  return selection?.mode;
+}
+
 async function ensureBackupDir(context: vscode.ExtensionContext): Promise<string> {
   const backupDir = path.join(context.globalStorageUri.fsPath, "telemetry-backups");
   await mkdir(backupDir, { recursive: true });
@@ -197,6 +244,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
     const targetPath = await commands.openEscapeFolder();
     await vscode.window.showInformationMessage(`Workspace Guard opened the Escape Folder at ${targetPath}.`);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.setMode", async () => {
+    const configuration = vscode.workspace.getConfiguration("homeguard");
+    const currentMode = configuration.get<HomeguardMode>("mode", "redirect");
+    const selectedMode = await pickProtectionMode(currentMode);
+    if (!selectedMode || selectedMode === currentMode) {
+      return;
+    }
+
+    await configuration.update("mode", selectedMode, vscode.ConfigurationTarget.Global);
+    await vscode.window.showInformationMessage(`Workspace Guard protection mode set to ${formatModeLabel(selectedMode)}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.removeHomeFoldersFromWorkspace", async () => {

@@ -35,6 +35,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:homeguard.openEscapeFolder",
+    "onCommand:homeguard.setMode",
     "onCommand:homeguard.removeHomeFoldersFromWorkspace",
     "onCommand:homeguard.auditTelemetry",
     "onCommand:homeguard.applyPrivacyHardening",
@@ -46,6 +47,11 @@
       {
         "command": "homeguard.openEscapeFolder",
         "title": "Open Escape Folder",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.setMode",
+        "title": "Set Protection Mode",
         "category": "Workspace Guard"
       },
       {
