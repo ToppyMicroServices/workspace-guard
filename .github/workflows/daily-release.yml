@@ -31,6 +31,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Compute daily version
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          DAILY_VERSION=$(node scripts/compute-extension-version.mjs next-daily "${BASE_VERSION}" "${RUN_NUMBER}" --write-package)
+          echo "DAILY_VERSION=${DAILY_VERSION}" >> "${GITHUB_ENV}"
+
       - name: Run tests
         run: npm test
 
@@ -59,20 +67,65 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/repos/${REPOSITORY}/code-scanning/alerts?tool_name=CodeQL&state=open&per_page=100" > codeql-alerts.json
 
+      - name: Collect Dependabot alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/dependabot/alerts?state=open&per_page=100" > dependabot-alerts.json
+
+      - name: Collect open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api \
+            --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/pulls?state=open&per_page=100" > open-prs.json
+
       - name: Build daily summary
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          TAG="daily-$(date -u +%Y-%m-%d)"
+          TAG="daily-v${DAILY_VERSION}"
           {
             echo "# Daily Workspace Guard prerelease"
             echo
             echo "- Repository: ${REPOSITORY}"
             echo "- Commit: ${GITHUB_SHA}"
+            echo "- Extension version: ${DAILY_VERSION}"
             echo "- Generated (UTC): $(date -u +'%Y-%m-%d %H:%M:%S')"
             echo
-            echo "## CodeQL"
+            echo "## Open pull requests"
           } > daily-release-notes.md
+
+          PR_TOTAL=$(jq 'length' open-prs.json)
+          {
+            echo "- Open PRs: ${PR_TOTAL}"
+            echo
+          } >> daily-release-notes.md
+
+          if [ "${PR_TOTAL}" -eq 0 ]; then
+            echo "No open pull requests." >> daily-release-notes.md
+          else
+            {
+              echo "### Pull requests"
+              jq -r '
+                .[:20]
+                | .[]
+                | "- #\(.number) \(.title) (@\(.user.login))"
+              ' open-prs.json
+              echo
+            } >> daily-release-notes.md
+          fi
+
+          {
+            echo "## CodeQL"
+          } >> daily-release-notes.md
 
           TOTAL=$(jq 'length' codeql-alerts.json)
           HIGH=$(jq '[.[] | select(.rule.severity == "error" or .rule.severity == "high")] | length' codeql-alerts.json)
@@ -97,12 +150,43 @@ jobs:
                 | .[]
                 | "- [\(.rule.id)] \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line) (\(.rule.severity // "unknown"))"
               ' codeql-alerts.json
+              echo
+            } >> daily-release-notes.md
+          fi
+
+          {
+            echo "## Dependabot"
+          } >> daily-release-notes.md
+
+          DEP_TOTAL=$(jq 'length' dependabot-alerts.json)
+          DEP_HIGH=$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' dependabot-alerts.json)
+          DEP_MEDIUM=$(jq '[.[] | select(.security_advisory.severity == "medium")] | length' dependabot-alerts.json)
+          DEP_LOW=$(jq '[.[] | select(.security_advisory.severity == "low")] | length' dependabot-alerts.json)
+
+          {
+            echo "- Open alerts: ${DEP_TOTAL}"
+            echo "- High/Critical: ${DEP_HIGH}"
+            echo "- Medium: ${DEP_MEDIUM}"
+            echo "- Low: ${DEP_LOW}"
+            echo
+          } >> daily-release-notes.md
+
+          if [ "${DEP_TOTAL}" -eq 0 ]; then
+            echo "No open Dependabot alerts." >> daily-release-notes.md
+          else
+            {
+              echo "### Dependabot alerts"
+              jq -r '
+                .[:20]
+                | .[]
+                | "- \(.dependency.package.name): \(.security_advisory.summary) (\(.security_advisory.severity // "unknown"))"
+              ' dependabot-alerts.json
             } >> daily-release-notes.md
           fi
 
           {
             echo "tag=${TAG}"
-            echo "title=Daily Prerelease ${TAG#daily-}"
+            echo "title=Daily Prerelease v${DAILY_VERSION}"
           } >> "${GITHUB_OUTPUT}"
         id: summary
 
@@ -129,7 +213,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.summary.outputs.tag }}
         run: |
-          gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json daily-release-notes.md --clobber
+          gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json dependabot-alerts.json open-prs.json daily-release-notes.md --clobber
 
       - name: Publish daily pre-release to Marketplace
         env:
