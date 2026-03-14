@@ -10,6 +10,13 @@ Privacy-first and offline-first by default: installing and using the extension d
 2. Leave the default `Redirect` mode on, or change it from the `WG:` status bar control.
 3. If you want to inspect a repository's automation risk, run `workspace-guard-scan` against that repository.
 
+## Release Channels
+
+- Stable releases are published to the normal Marketplace channel from a GitHub release tag.
+- Daily builds are published to the Marketplace pre-release channel and attached to a GitHub daily prerelease.
+- Stable versioning follows normal patch/minor increments: `1.2.3 -> 1.2.4`, `1.2 -> 1.3.0`.
+- Daily pre-release versioning moves to the next minor line and uses the GitHub run number as the patch: `1.2.3 -> 1.3.<run_number>`, `1.2 -> 1.3.<run_number>`.
+
 ## CLI Usage
 
 ```bash
