@@ -8,49 +8,18 @@ Privacy-first and offline-first by default: installing and using the extension d
 
 1. Install Workspace Guard in VS Code.
 2. Leave the default `Redirect` mode on, or change it from the `WG:` status bar control.
-3. If you want to inspect a repository's automation risk, run `workspace-guard-scan` against that repository.
+3. If you want to inspect a repository before trusting it, run `workspace-guard-scan` in that repository.
 
-## Release Channels
-
-- Stable releases are published to the normal Marketplace channel from a GitHub release tag.
-- Daily builds are published to the Marketplace pre-release channel and attached to a GitHub daily prerelease.
-- Stable versioning follows normal patch/minor increments: `1.2.3 -> 1.2.4`, `1.2 -> 1.3.0`.
-- Daily pre-release versioning moves to the next minor line and uses the GitHub run number as the patch: `1.2.3 -> 1.3.<run_number>`, `1.2 -> 1.3.<run_number>`.
-
-## CLI Usage
+## Optional CLI
 
 ```bash
 npx homeguard-code ~
-npx homeguard-code .
-npx homeguard-code -- ~/work/projectA ~
-```
-
-Core CLI behaviors:
-
-- Safe targets pass through unchanged
-- Home-directory targets can warn, redirect, block, or audit
-- High-risk folders warn without rewriting the target
-- Redirect mode creates the escape folder before spawning VS Code
-
-## GitHub Metadata Scan
-
-Use the scanner to review high-risk repository metadata before enabling Actions or trusting repository automation:
-
-```bash
 npx workspace-guard-scan .
-npx workspace-guard-scan --resolve-external-workflows .
 ```
 
-The scanner is meant to answer a simple question before you trust a repository: "Can this repo run something dangerous, publish something, or trick a maintainer into doing the wrong thing?"
+Use `homeguard-code` if you want the `code` command to check risky paths before opening VS Code. Use `workspace-guard-scan` if you want a quick safety review of a repository's `.github` automation before you trust it.
 
-It currently looks for:
-
-- GitHub Actions that can execute dangerous code, publish with too much power, or trust untrusted pull request input
-- Indirect execution paths that are easy to miss, such as reusable workflows, container-based actions, and values that flow into shell execution
-- Repository settings that weaken dependency safety or review flow, such as risky Dependabot options and overly broad `CODEOWNERS`
-- Issue and pull request templates that push contributors toward unsafe commands or secret disclosure
-
-If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it performs a network fetch for the referenced workflow files.
+If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it fetches the referenced workflow files.
 
 Disclaimer: Workspace Guard reduces common VS Code workspace and repository-trust mistakes, but it is not a sandbox, malware scanner, or guarantee against all unsafe repositories, extensions, or user actions.
 
