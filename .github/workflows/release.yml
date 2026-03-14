@@ -55,7 +55,7 @@ jobs:
         run: |
           EXPECTED_VERSION="$(node -p "require('./package.json').version")"
 
-          for attempt in $(seq 1 24); do
+          for attempt in $(seq 1 45); do
             PUBLISHED_VERSION="$(npx @vscode/vsce show ToppyMicroServices.workspace-guard --json | node -e "let data=''; process.stdin.on('data', (chunk) => data += chunk); process.stdin.on('end', () => { const payload = JSON.parse(data); process.stdout.write(payload.versions?.[0]?.version ?? ''); });")"
 
             if [ "$PUBLISHED_VERSION" = "$EXPECTED_VERSION" ]; then
@@ -63,8 +63,8 @@ jobs:
               exit 0
             fi
 
-            echo "Marketplace still shows '$PUBLISHED_VERSION'; waiting for '$EXPECTED_VERSION' (attempt $attempt/24)."
-            sleep 5
+            echo "Marketplace still shows '$PUBLISHED_VERSION'; waiting for '$EXPECTED_VERSION' (attempt $attempt/45)."
+            sleep 20
           done
 
           echo "Marketplace did not publish expected version $EXPECTED_VERSION." >&2
