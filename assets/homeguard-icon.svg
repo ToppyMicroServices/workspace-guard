@@ -14,12 +14,12 @@
       <stop offset="0.55" stop-color="#589864"/>
       <stop offset="1" stop-color="#406A5E"/>
     </linearGradient>
-    <filter id="shadow" x="4" y="4" width="120" height="120" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <filter id="shadow" x="-12" y="-12" width="152" height="152" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#02060D" flood-opacity="0.55"/>
     </filter>
   </defs>
 
-  <g filter="url(#shadow)">
+  <g filter="url(#shadow)" transform="translate(64 64) scale(1.1) translate(-64 -64)">
     <path d="M22 16L100 10L116 28L108 102L30 110L12 92L22 16Z" fill="url(#bg)"/>
     <path d="M64 16L98 28V54C98 75 84 94 64 104C44 94 30 75 30 54V28L64 16Z" fill="url(#shieldOuter)"/>
     <path d="M64 25L89 34V54C89 69 79 82 64 91C49 82 39 69 39 54V34L64 25Z" fill="url(#shieldInner)"/>
