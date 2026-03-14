@@ -4,17 +4,17 @@
       <stop stop-color="#243A73"/>
       <stop offset="1" stop-color="#17264A"/>
     </linearGradient>
-    <linearGradient id="shieldOuter" x1="34" y1="20" x2="92" y2="108" gradientUnits="userSpaceOnUse">
+    <linearGradient id="shieldOuter" x1="34" y1="12" x2="92" y2="114" gradientUnits="userSpaceOnUse">
       <stop stop-color="#9AE683"/>
       <stop offset="0.55" stop-color="#6CCB67"/>
       <stop offset="1" stop-color="#4E9D60"/>
     </linearGradient>
-    <linearGradient id="shieldMid" x1="42" y1="28" x2="86" y2="100" gradientUnits="userSpaceOnUse">
+    <linearGradient id="shieldMid" x1="42" y1="20" x2="86" y2="106" gradientUnits="userSpaceOnUse">
       <stop stop-color="#85D776"/>
       <stop offset="0.55" stop-color="#67BE67"/>
       <stop offset="1" stop-color="#4D905D"/>
     </linearGradient>
-    <linearGradient id="shieldInner" x1="46" y1="38" x2="82" y2="88" gradientUnits="userSpaceOnUse">
+    <linearGradient id="shieldInner" x1="46" y1="28" x2="82" y2="94" gradientUnits="userSpaceOnUse">
       <stop stop-color="#CEF4C2"/>
       <stop offset="1" stop-color="#A8E08E"/>
     </linearGradient>
@@ -27,9 +27,9 @@
     <path d="M20 14L92 10L116 30L110 114L30 118L8 94L20 14Z" fill="#2956AB"/>
     <path d="M24 16L91 14L114 29L108 111L31 116L10 92L24 16Z" fill="url(#bg)"/>
     <path d="M24 16L91 14L114 29L108 64L38 64L24 50V16Z" fill="#5B7BCB" fill-opacity="0.18"/>
-    <path d="M64 14L97 27V58C97 75 84 94 64 108C44 94 31 75 31 58V27L64 14Z" fill="url(#shieldOuter)"/>
-    <path d="M64 22L90 33V59C90 72 80 89 64 99C48 89 38 72 38 59V33L64 22Z" fill="url(#shieldMid)"/>
-    <path d="M64 30L83 38V60C83 70 76 83 64 91C52 83 45 70 45 60V38L64 30Z" fill="url(#shieldInner)"/>
-    <path d="M49 63L63 77L84 53" stroke="#F7FAF4" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M64 9L98 23V59C98 79 85 100 64 116C43 100 30 79 30 59V23L64 9Z" fill="url(#shieldOuter)"/>
+    <path d="M64 18L92 30V60C92 76 82 94 64 107C46 94 36 76 36 60V30L64 18Z" fill="url(#shieldMid)"/>
+    <path d="M64 27L84 36V61C84 73 77 88 64 98C51 88 44 73 44 61V36L64 27Z" fill="url(#shieldInner)"/>
+    <path d="M49 63L63 77L84 51" stroke="#F7FAF4" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
