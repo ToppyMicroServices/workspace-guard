@@ -27,9 +27,10 @@
     <path d="M20 14L92 10L116 30L110 114L30 118L8 94L20 14Z" fill="#2956AB"/>
     <path d="M24 16L91 14L114 29L108 111L31 116L10 92L24 16Z" fill="url(#bg)"/>
     <path d="M24 16L91 14L114 29L108 64L38 64L24 50V16Z" fill="#5B7BCB" fill-opacity="0.18"/>
-    <path d="M64 9L98 23V59C98 79 85 100 64 116C43 100 30 79 30 59V23L64 9Z" fill="url(#shieldOuter)"/>
-    <path d="M64 18L92 30V60C92 76 82 94 64 107C46 94 36 76 36 60V30L64 18Z" fill="url(#shieldMid)"/>
-    <path d="M64 27L84 36V61C84 73 77 88 64 98C51 88 44 73 44 61V36L64 27Z" fill="url(#shieldInner)"/>
-    <path d="M49 63L63 77L84 51" stroke="#F7FAF4" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M64 9L99.5 24.5V58C99.5 68.5 98.5 74 92 88C87 94.5 81.5 101 64 112C46.5 101 41 94.5 36 88C29.5 74 28.5 68.5 28.5 58V24.5L64 9Z" fill="url(#shieldOuter)"/>
+    <path d="M64 18L92 29.5V59C92 67.5 91 72 85.5 83.5C81.5 89.5 77 94.5 64 102C51 94.5 46.5 89.5 42.5 83.5C37 72 36 67.5 36 59V29.5L64 18Z" fill="url(#shieldMid)"/>
+    <path d="M64 26.5L85 35.5V60C85 66.5 84 70 79.5 78.5C76.5 83.5 73 88 64 93.5C55 88 51.5 83.5 48.5 78.5C44 70 43 66.5 43 60V35.5L64 26.5Z" fill="url(#shieldInner)"/>
+    <path d="M64 29L83.5 37.5L78.5 50L64 50.5L49.5 49.5L44.5 37.5L64 29Z" fill="#E7FFDF" fill-opacity="0.22"/>
+    <path d="M48 63L63 78.5L85.5 52.5" stroke="#F7FAF4" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
