@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   security-events: read
 
 concurrency:
@@ -17,6 +17,10 @@ jobs:
   daily-prerelease:
     name: Build Daily Prerelease
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      security-events: read
 
     steps:
       - name: Check out repository

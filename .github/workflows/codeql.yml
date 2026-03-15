@@ -9,14 +9,17 @@ on:
     - cron: "43 2 * * *"
 
 permissions:
-  actions: read
   contents: read
-  security-events: write
+  actions: read
 
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
 
     strategy:
       fail-fast: false
