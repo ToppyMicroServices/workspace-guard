@@ -277,7 +277,9 @@ describe("createWorkspaceSafetyGuard", () => {
     expect(result.disposition).toBe("blocked");
     expect(result.result).toBeUndefined();
     expect(removedFolders).toEqual([homeDir]);
-    expect(openedFolders).toEqual([path.join(homeDir, "work", "_escape")]);
+    expect(openedFolders.map((entry) => path.normalize(entry))).toEqual([
+      path.normalize(path.join(homeDir, "work", "_escape"))
+    ]);
   });
 
   it("cancels git operations when the user declines confirmation", async () => {
