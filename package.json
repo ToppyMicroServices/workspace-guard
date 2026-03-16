@@ -1,12 +1,11 @@
 {
   "name": "workspace-guard",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "displayName": "Workspace Guard",
-  "preview": true,
   "publisher": "ToppyMicroServices",
   "license": "Apache-2.0",
-  "description": "Preview: Warn before VS Code opens your home directory or other high-risk folders, and offer privacy hardening for telemetry-related settings.",
+  "description": "Warn before VS Code opens your home directory or other high-risk folders, and offer privacy hardening for telemetry-related settings.",
   "icon": "assets/workspace-guard-icon.png",
   "main": "./dist/src/vscodeExtension.js",
   "engines": {
@@ -223,7 +222,8 @@
     "test": "vitest run",
     "vscode:prepublish": "npm run build",
     "package:extension": "vsce package",
-    "publish:extension": "vsce publish"
+    "publish:extension": "vsce publish",
+    "verify:marketplace-release": "node scripts/verify-marketplace-release.mjs"
   },
   "repository": {
     "type": "git",

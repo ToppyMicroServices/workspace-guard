@@ -53,24 +53,14 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npm run publish:extension -- --packagePath workspace-guard.vsix
 
-      - name: Verify Marketplace version
+      - name: Verify Marketplace release
         run: |
           EXPECTED_VERSION="$(node -p "require('./package.json').version")"
-
-          for attempt in $(seq 1 45); do
-            PUBLISHED_VERSION="$(npx @vscode/vsce show ToppyMicroServices.workspace-guard --json | node -e "let data=''; process.stdin.on('data', (chunk) => data += chunk); process.stdin.on('end', () => { const payload = JSON.parse(data); process.stdout.write(payload.versions?.[0]?.version ?? ''); });")"
-
-            if [ "$PUBLISHED_VERSION" = "$EXPECTED_VERSION" ]; then
-              echo "Marketplace shows version $PUBLISHED_VERSION."
-              exit 0
-            fi
-
-            echo "Marketplace still shows '$PUBLISHED_VERSION'; waiting for '$EXPECTED_VERSION' (attempt $attempt/45)."
-            sleep 20
-          done
-
-          echo "Marketplace did not publish expected version $EXPECTED_VERSION." >&2
-          exit 1
+          npm run verify:marketplace-release -- \
+            --publisher ToppyMicroServices \
+            --name workspace-guard \
+            --version "$EXPECTED_VERSION" \
+            --mode universal
 
       - name: Upload VSIX to GitHub release
         env:

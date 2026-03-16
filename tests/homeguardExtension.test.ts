@@ -126,7 +126,9 @@ describe("activateHomeguardExtension", () => {
       { folderPath: homeDir, action: "redirected" }
     ]);
     expect(removedFolders).toEqual([homeDir]);
-    expect(openedFolders).toEqual([escapeDir]);
+    expect(openedFolders.map((entry) => path.normalize(entry))).toEqual([
+      path.normalize(escapeDir)
+    ]);
     expect(infos[0]).toContain("redirected");
 
     const readme = await readFile(path.join(escapeDir, "README.md"), "utf8");
@@ -232,7 +234,9 @@ describe("createHomeguardCommandHandlers", () => {
 
     const target = await handlers.openEscapeFolder();
 
-    expect(target).toBe(path.join(homeDir, "work", "_escape"));
-    expect(openedFolders).toEqual([path.join(homeDir, "work", "_escape")]);
+    expect(path.normalize(target)).toBe(path.normalize(path.join(homeDir, "work", "_escape")));
+    expect(openedFolders.map((entry) => path.normalize(entry))).toEqual([
+      path.normalize(path.join(homeDir, "work", "_escape"))
+    ]);
   });
 });
