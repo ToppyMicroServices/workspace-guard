@@ -223,3 +223,12 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npm run publish:extension -- --packagePath workspace-guard.vsix --pre-release
+
+      - name: Verify Marketplace prerelease
+        run: |
+          npm run verify:marketplace-release -- \
+            --publisher ToppyMicroServices \
+            --name workspace-guard \
+            --version "$DAILY_VERSION" \
+            --mode universal
+
