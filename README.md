@@ -1,5 +1,8 @@
 # Workspace Guard
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ToppyMicroServices/workspace-guard/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ToppyMicroServices/workspace-guard)
+[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-pending-lightgrey)](https://www.bestpractices.dev/)
+
 Prevent accidental home-directory opens in VS Code and review risky `.github` automation before trusting a repository.
 
 Privacy-first and offline-first by default: installing and using the extension does not send telemetry, phone home, or require remote access. Only the optional `--resolve-external-workflows` scan mode fetches external workflow files.
