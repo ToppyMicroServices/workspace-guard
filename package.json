@@ -41,7 +41,8 @@
     "onCommand:homeguard.applyPrivacyHardening",
     "onCommand:homeguard.rollbackPrivacyHardening",
     "onCommand:homeguard.assessWorkspaceSafety",
-    "onCommand:homeguard.reviewGithubAutomation"
+    "onCommand:homeguard.reviewGithubAutomation",
+    "onCommand:homeguard.refreshGithubAutomationReview"
   ],
   "contributes": {
     "commands": [
@@ -84,8 +85,30 @@
         "command": "homeguard.reviewGithubAutomation",
         "title": "Review .github Automation",
         "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.refreshGithubAutomationReview",
+        "title": "Refresh .github Review",
+        "category": "Workspace Guard"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "workspaceGuardReview",
+          "name": "Workspace Guard Review"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "homeguard.refreshGithubAutomationReview",
+          "when": "view == workspaceGuardReview",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Workspace Guard",
       "properties": {
