@@ -192,3 +192,7 @@ export function formatGithubFindingRemediationMarkdown(finding: GithubMetadataFi
 
   return lines.join("\n");
 }
+
+export function getGithubFindingRemediationSnippet(finding: GithubMetadataFinding): string | undefined {
+  return buildGithubFindingRemediation(finding).snippet;
+}

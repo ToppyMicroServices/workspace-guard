@@ -12,8 +12,9 @@ Privacy-first and offline-first by default: installing and using the extension d
 1. Install Workspace Guard in VS Code.
 2. Leave the default `Redirect` mode on, or change it from the `WG:` status bar control.
 3. Open the `Workspace Guard Review` section in Explorer for a lightweight `.github` findings tree inside VS Code, then click any finding for remediation guidance.
-4. Run `Workspace Guard: Review .github Automation` from the Command Palette if you want the same review in the output panel.
-5. If you want to inspect a repository from the terminal, run `workspace-guard-scan` in that repository.
+4. Use the filter and export actions in that view if you want to focus on one severity or share the review as JSON or Markdown.
+5. Run `Workspace Guard: Review .github Automation` from the Command Palette if you want the same review in the output panel.
+6. If you want to inspect a repository from the terminal, run `workspace-guard-scan` in that repository.
 
 ## Optional CLI
 

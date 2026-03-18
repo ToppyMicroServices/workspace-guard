@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { GithubMetadataScanResult } from "../src";
 import { summarizeGithubMetadataReports } from "../src";
 import {
+  filterGithubMetadataReport,
   formatGithubFindingDescription,
   formatGithubFindingTooltip,
+  formatGithubMetadataReportsMarkdown,
   formatGithubMetadataSummary,
+  formatGithubTrustLabel,
+  getGithubReviewTrustLevel,
   formatGithubMetadataWorkspaceLabel,
   formatGithubMetadataWorkspaceSummary
 } from "../src/extension/githubReviewPresentation";
@@ -49,6 +53,8 @@ describe("githubReviewPresentation", () => {
     const summary = summarizeGithubMetadataReports([report]);
 
     expect(formatGithubMetadataSummary(summary)).toContain("2 .github findings");
+    expect(getGithubReviewTrustLevel(summary)).toBe("high-risk");
+    expect(formatGithubTrustLabel(summary)).toBe("High Risk");
     expect(formatGithubMetadataWorkspaceLabel(report)).toBe("demo-repo");
     expect(formatGithubMetadataWorkspaceSummary(report)).toBe("1 high, 1 info");
   });
@@ -70,5 +76,23 @@ describe("githubReviewPresentation", () => {
 
     expect(formatGithubMetadataSummary(summary)).toBe("Workspace Guard found no .github risks in the current workspace.");
     expect(formatGithubMetadataWorkspaceSummary(report)).toBe("No findings");
+  });
+
+  it("filters report findings by severity", () => {
+    const report = createReport();
+    const filtered = filterGithubMetadataReport(report, "high");
+
+    expect(filtered.findings).toHaveLength(1);
+    expect(formatGithubMetadataWorkspaceSummary(filtered, "high")).toBe("1 high");
+  });
+
+  it("formats review export markdown", () => {
+    const report = createReport();
+    const summary = summarizeGithubMetadataReports([report]);
+    const markdown = formatGithubMetadataReportsMarkdown([report], summary, "all");
+
+    expect(markdown).toContain("# Workspace Guard .github Review");
+    expect(markdown).toContain("Trust: High Risk");
+    expect(markdown).toContain("Suggested action: Use pull_request instead.");
   });
 });

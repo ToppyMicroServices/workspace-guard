@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { GithubMetadataFinding } from "../src";
 import {
   buildGithubFindingRemediation,
-  formatGithubFindingRemediationMarkdown
+  formatGithubFindingRemediationMarkdown,
+  getGithubFindingRemediationSnippet
 } from "../src/extension/githubRemediation";
 
 function createFinding(id: string, suggestedAction: string): GithubMetadataFinding {
@@ -48,5 +49,13 @@ describe("githubRemediation", () => {
     expect(markdown).toContain("# Pass only the secrets the callee needs");
     expect(markdown).toContain("Suggested Action");
     expect(markdown).toContain("```yaml");
+  });
+
+  it("returns a patch snippet when the remediation has one", () => {
+    const snippet = getGithubFindingRemediationSnippet(
+      createFinding("WG-GHWF-003", "Reduce contents to read.")
+    );
+
+    expect(snippet).toContain("contents: read");
   });
 });

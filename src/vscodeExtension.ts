@@ -23,17 +23,25 @@ import {
 import {
   formatGithubFindingDescription,
   formatGithubFindingTooltip,
+  filterGithubMetadataReport,
   formatGithubMetadataSummary,
+  formatGithubMetadataReportsMarkdown,
+  formatGithubTrustLabel,
   formatGithubMetadataWorkspaceLabel,
-  formatGithubMetadataWorkspaceSummary
+  formatGithubMetadataWorkspaceSummary,
+  type GithubReviewSeverityFilter
 } from "./extension/githubReviewPresentation";
-import { formatGithubFindingRemediationMarkdown } from "./extension/githubRemediation";
+import {
+  formatGithubFindingRemediationMarkdown,
+  getGithubFindingRemediationSnippet
+} from "./extension/githubRemediation";
 
 const LAST_BACKUP_PATH_KEY = "homeguard.lastTelemetryBackupPath";
+const GITHUB_REVIEW_FILTER_KEY = "homeguard.githubReviewSeverityFilter";
 
 type GithubReviewTreeNode =
-  | { kind: "summary"; summary: GithubMetadataReviewSummary }
-  | { kind: "workspace"; report: GithubMetadataScanResult }
+  | { kind: "summary"; summary: GithubMetadataReviewSummary; filteredSummary: GithubMetadataReviewSummary; filter: GithubReviewSeverityFilter }
+  | { kind: "workspace"; report: GithubMetadataScanResult; fullReport: GithubMetadataScanResult; filter: GithubReviewSeverityFilter }
   | { kind: "finding"; finding: GithubMetadataFinding; rootPath: string }
   | { kind: "empty"; label: string; description?: string };
 
@@ -41,12 +49,26 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<GithubReviewTreeNode | undefined>();
 
   private reports: GithubMetadataScanResult[] = [];
+  private filter: GithubReviewSeverityFilter = "all";
 
   public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
   public setReports(reports: GithubMetadataScanResult[]): void {
     this.reports = reports;
     this.onDidChangeTreeDataEmitter.fire(undefined);
+  }
+
+  public getReports(): GithubMetadataScanResult[] {
+    return this.reports;
+  }
+
+  public setFilter(filter: GithubReviewSeverityFilter): void {
+    this.filter = filter;
+    this.onDidChangeTreeDataEmitter.fire(undefined);
+  }
+
+  public getFilter(): GithubReviewSeverityFilter {
+    return this.filter;
   }
 
   public getTreeItem(element: GithubReviewTreeNode): vscode.TreeItem {
@@ -59,16 +81,23 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
     }
 
     if (element.kind === "summary") {
+      const trustLabel = formatGithubTrustLabel(element.summary);
+      const filteredCount = element.filteredSummary.totalFindings;
+      const heading = element.filter === "all"
+        ? `${trustLabel}: ${element.summary.totalFindings} .github findings`
+        : `${trustLabel}: ${filteredCount} ${element.filter} finding${filteredCount === 1 ? "" : "s"}`;
       const item = new vscode.TreeItem(
-        element.summary.totalFindings === 0 ? "No .github risks" : `${element.summary.totalFindings} .github findings`,
+        element.summary.totalFindings === 0 ? "Safe: No .github risks" : heading,
         vscode.TreeItemCollapsibleState.None
       );
-      item.description = element.summary.totalFindings === 0
-        ? `${element.summary.workspaceFoldersWithGithub} workspace folder${element.summary.workspaceFoldersWithGithub === 1 ? "" : "s"} with .github`
-        : formatGithubMetadataSummary(element.summary);
-      item.tooltip = formatGithubMetadataSummary(element.summary);
+      item.description = element.filter === "all"
+        ? formatGithubMetadataSummary(element.summary)
+        : `${formatGithubMetadataSummary(element.summary)} Showing ${element.filter} findings only.`;
+      item.tooltip = `${formatGithubMetadataSummary(element.summary)}\nFilter: ${element.filter}`;
       item.contextValue = "workspaceGuardGithubReview.summary";
-      item.iconPath = new vscode.ThemeIcon(element.summary.highFindings > 0 ? "warning" : "shield");
+      item.iconPath = new vscode.ThemeIcon(
+        element.summary.highFindings > 0 ? "warning" : (element.summary.mediumFindings > 0 ? "shield" : "pass")
+      );
       return item;
     }
 
@@ -77,13 +106,17 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None;
       const item = new vscode.TreeItem(
-        formatGithubMetadataWorkspaceLabel(element.report),
+        formatGithubMetadataWorkspaceLabel(element.fullReport),
         collapsibleState
       );
-      item.description = formatGithubMetadataWorkspaceSummary(element.report);
-      item.tooltip = `${element.report.rootPath}\n${formatGithubMetadataWorkspaceSummary(element.report)}`;
+      const workspaceSummary = summarizeGithubMetadataReports([element.fullReport]);
+      const trustLabel = formatGithubTrustLabel(workspaceSummary);
+      item.description = `${trustLabel} · ${formatGithubMetadataWorkspaceSummary(element.report, element.filter)}`;
+      item.tooltip = `${element.fullReport.rootPath}\n${trustLabel}\n${formatGithubMetadataWorkspaceSummary(element.report, element.filter)}`;
       item.contextValue = "workspaceGuardGithubReview.workspace";
-      item.iconPath = new vscode.ThemeIcon("repo");
+      item.iconPath = new vscode.ThemeIcon(
+        workspaceSummary.highFindings > 0 ? "warning" : (workspaceSummary.mediumFindings > 0 ? "repo" : "pass")
+      );
       return item;
     }
 
@@ -109,15 +142,43 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
         return [{ kind: "empty", label: "No .github files in the current workspace." }];
       }
 
+      const filteredEntries = scannedReports.map((report) => ({
+        fullReport: report,
+        filteredReport: filterGithubMetadataReport(report, this.filter)
+      }));
+      const filteredVisibleEntries = filteredEntries.filter(({ fullReport, filteredReport }) => {
+        if (this.filter === "all") {
+          return true;
+        }
+
+        return filteredReport.findings.length > 0 || fullReport.findings.length === 0;
+      });
+      const filteredSummary = summarizeGithubMetadataReports(filteredEntries.map((entry) => entry.filteredReport));
       return [
-        { kind: "summary", summary: summarizeGithubMetadataReports(scannedReports) },
-        ...scannedReports.map((report) => ({ kind: "workspace", report } as const))
+        {
+          kind: "summary",
+          summary: summarizeGithubMetadataReports(scannedReports),
+          filteredSummary,
+          filter: this.filter
+        },
+        ...filteredVisibleEntries.map(({ filteredReport, fullReport }) => ({
+          kind: "workspace",
+          report: filteredReport,
+          fullReport,
+          filter: this.filter
+        } as const))
       ];
     }
 
     if (element.kind === "workspace") {
       if (element.report.findings.length === 0) {
-        return [{ kind: "empty", label: "No findings", description: "This workspace .github review is clean." }];
+        return [{
+          kind: "empty",
+          label: element.filter === "all" ? "No findings" : `No ${element.filter} findings`,
+          description: element.filter === "all"
+            ? "This workspace .github review is clean."
+            : `This workspace has no ${element.filter} findings under the current filter.`
+        }];
       }
 
       return element.report.findings.map((finding) => ({ kind: "finding", finding, rootPath: element.report.rootPath }));
@@ -420,6 +481,38 @@ async function openGithubFindingLocation(
   }
 }
 
+function getDefaultGithubExportUri(
+  context: vscode.ExtensionContext,
+  extension: string
+): vscode.Uri | undefined {
+  const baseUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!baseUri) {
+    return undefined;
+  }
+
+  return vscode.Uri.joinPath(baseUri, `workspace-guard-github-review.${extension}`);
+}
+
+async function exportGithubReviewContent(
+  context: vscode.ExtensionContext,
+  content: string,
+  extension: string
+): Promise<vscode.Uri | undefined> {
+  const targetUri = await vscode.window.showSaveDialog({
+    saveLabel: "Export Workspace Guard review",
+    defaultUri: getDefaultGithubExportUri(context, extension),
+    filters: extension === "json"
+      ? { JSON: ["json"] }
+      : { Markdown: ["md"] }
+  });
+  if (!targetUri) {
+    return undefined;
+  }
+
+  await vscode.workspace.fs.writeFile(targetUri, new TextEncoder().encode(content));
+  return targetUri;
+}
+
 function resolveGithubFindingCommandArgs(
   findingOrNode: GithubMetadataFinding | GithubReviewTreeNode,
   rootPath?: string
@@ -451,6 +544,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dispose: () => activation.dispose()
   });
   const githubReviewTreeProvider = new GithubReviewTreeProvider();
+  githubReviewTreeProvider.setFilter(
+    context.workspaceState.get<GithubReviewSeverityFilter>(GITHUB_REVIEW_FILTER_KEY, "all")
+  );
   const githubReviewTreeView = vscode.window.createTreeView("workspaceGuardReview", {
     treeDataProvider: githubReviewTreeProvider,
     showCollapseAll: true
@@ -568,8 +664,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.refreshGithubAutomationReview", async () => {
     const reports = await refreshGithubReviewTree();
-    const summary = summarizeGithubMetadataReports(reports.filter((report) => report.scannedFiles.length > 0));
+    const summary = summarizeGithubMetadataReports(
+      reports.filter((report) => report.scannedFiles.length > 0).map((report) => filterGithubMetadataReport(report, githubReviewTreeProvider.getFilter()))
+    );
     await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.setGithubReviewSeverityFilter", async () => {
+    const currentFilter = githubReviewTreeProvider.getFilter();
+    const selection = await vscode.window.showQuickPick(
+      [
+        { label: "All", detail: "Show every finding.", filter: "all" as GithubReviewSeverityFilter },
+        { label: "High", detail: "Show only high-severity findings.", filter: "high" as GithubReviewSeverityFilter },
+        { label: "Medium", detail: "Show only medium-severity findings.", filter: "medium" as GithubReviewSeverityFilter },
+        { label: "Info", detail: "Show only informational findings.", filter: "info" as GithubReviewSeverityFilter }
+      ],
+      {
+        title: "Workspace Guard Review Filter",
+        placeHolder: `Current filter: ${currentFilter}`
+      }
+    );
+    if (!selection) {
+      return;
+    }
+
+    githubReviewTreeProvider.setFilter(selection.filter);
+    await context.workspaceState.update(GITHUB_REVIEW_FILTER_KEY, selection.filter);
+    await vscode.window.showInformationMessage(`Workspace Guard review filter is now ${selection.label}.`);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.exportGithubReviewJson", async () => {
+    const reports = githubReviewTreeProvider.getReports();
+    const filter = githubReviewTreeProvider.getFilter();
+    const content = JSON.stringify({
+      filter,
+      trust: formatGithubTrustLabel(summarizeGithubMetadataReports(reports)),
+      reports: reports.map((report) => filterGithubMetadataReport(report, filter))
+    }, null, 2);
+    const targetUri = await exportGithubReviewContent(context, content, "json");
+    if (targetUri) {
+      await vscode.window.showInformationMessage(`Workspace Guard exported JSON review to ${targetUri.fsPath}.`);
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.exportGithubReviewMarkdown", async () => {
+    const reports = githubReviewTreeProvider.getReports();
+    const filter = githubReviewTreeProvider.getFilter();
+    const filteredReports = reports.map((report) => filterGithubMetadataReport(report, filter));
+    const summary = summarizeGithubMetadataReports(filteredReports);
+    const content = formatGithubMetadataReportsMarkdown(filteredReports, summary, filter);
+    const targetUri = await exportGithubReviewContent(context, content, "md");
+    if (targetUri) {
+      await vscode.window.showInformationMessage(`Workspace Guard exported Markdown review to ${targetUri.fsPath}.`);
+    }
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.showGithubFindingDetails", async (findingOrNode: GithubMetadataFinding | GithubReviewTreeNode) => {
@@ -612,6 +759,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           action: "copy" as const
         },
         {
+          label: "Copy patch snippet",
+          detail: "Copy the remediation example snippet when available.",
+          action: "copy-snippet" as const
+        },
+        {
           label: "Show finding details",
           detail: `${finding.id} · ${finding.reason}`,
           action: "details" as const
@@ -640,6 +792,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (selection.action === "copy") {
       await vscode.env.clipboard.writeText(finding.suggestedAction);
       await vscode.window.showInformationMessage("Workspace Guard copied the suggested action.");
+      return;
+    }
+
+    if (selection.action === "copy-snippet") {
+      const snippet = getGithubFindingRemediationSnippet(finding);
+      if (!snippet) {
+        await vscode.window.showWarningMessage("Workspace Guard does not have a patch snippet for this finding yet.");
+        return;
+      }
+
+      await vscode.env.clipboard.writeText(snippet);
+      await vscode.window.showInformationMessage("Workspace Guard copied the remediation snippet.");
       return;
     }
 
