@@ -40,7 +40,8 @@
     "onCommand:homeguard.auditTelemetry",
     "onCommand:homeguard.applyPrivacyHardening",
     "onCommand:homeguard.rollbackPrivacyHardening",
-    "onCommand:homeguard.assessWorkspaceSafety"
+    "onCommand:homeguard.assessWorkspaceSafety",
+    "onCommand:homeguard.reviewGithubAutomation"
   ],
   "contributes": {
     "commands": [
@@ -77,6 +78,11 @@
       {
         "command": "homeguard.assessWorkspaceSafety",
         "title": "Assess Workspace Safety",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.reviewGithubAutomation",
+        "title": "Review .github Automation",
         "category": "Workspace Guard"
       }
     ],
@@ -163,6 +169,11 @@
           "type": "boolean",
           "default": true,
           "description": "Create a settings backup before privacy hardening changes are applied."
+        },
+        "homeguard.githubReview.checkOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Review .github automation in the current workspace on startup and warn when medium or high-risk findings are present."
         },
         "homeguard.safety.enableSaveGuard": {
           "type": "boolean",

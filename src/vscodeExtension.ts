@@ -4,11 +4,18 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { type HomeguardMode, type HomeguardSettingsInput } from "./core/config";
+import {
+  formatGithubMetadataScanResult,
+  scanGithubMetadata,
+  type GithubMetadataScanResult
+} from "./core/githubMetadataScanner";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
 import type { SettingsStore } from "./core/settingsBackup";
 import {
   activateHomeguardExtension,
   createHomeguardCommandHandlers,
+  summarizeGithubMetadataReports,
+  type GithubMetadataReviewSummary,
   type HomeguardExtensionHost,
   type WorkspaceFolderLike
 } from "./extension/homeguardExtension";
@@ -60,6 +67,9 @@ function getHomeguardSettings(): HomeguardSettingsInput {
       auditOnStartup: configuration.get<boolean>("privacy.auditOnStartup"),
       offerHardening: configuration.get<boolean>("privacy.offerHardening"),
       backupBeforeApply: configuration.get<boolean>("privacy.backupBeforeApply")
+    },
+    githubReview: {
+      checkOnStartup: configuration.get<boolean>("githubReview.checkOnStartup")
     },
     safety: {
       enableSaveGuard: configuration.get<boolean>("safety.enableSaveGuard"),
@@ -129,7 +139,8 @@ function createHost(outputChannel: vscode.OutputChannel): HomeguardExtensionHost
       return {
         dispose: () => disposable.dispose()
       };
-    }
+    },
+    scanGithubMetadata: async (rootPath) => await scanGithubMetadata(rootPath)
   };
 }
 
@@ -152,6 +163,45 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
     `High-risk folders: ${assessment.highRiskFolders.length}`
   ];
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
+}
+
+function formatGithubMetadataSummary(summary: GithubMetadataReviewSummary): string {
+  if (summary.totalFindings === 0) {
+    return "Workspace Guard found no .github risks in the current workspace.";
+  }
+
+  const severityParts: string[] = [];
+  if (summary.highFindings > 0) {
+    severityParts.push(`${summary.highFindings} high`);
+  }
+  if (summary.mediumFindings > 0) {
+    severityParts.push(`${summary.mediumFindings} medium`);
+  }
+  if (summary.infoFindings > 0) {
+    severityParts.push(`${summary.infoFindings} info`);
+  }
+
+  return `Workspace Guard found ${summary.totalFindings} .github finding${summary.totalFindings === 1 ? "" : "s"} across ${summary.workspaceFoldersWithRisk} workspace folder${summary.workspaceFoldersWithRisk === 1 ? "" : "s"} (${severityParts.join(", ")}).`;
+}
+
+function writeGithubMetadataReports(
+  outputChannel: vscode.OutputChannel,
+  reports: GithubMetadataScanResult[]
+): GithubMetadataReviewSummary {
+  const summary = summarizeGithubMetadataReports(reports);
+  outputChannel.appendLine(formatGithubMetadataSummary(summary));
+
+  for (const report of reports) {
+    if (report.scannedFiles.length === 0) {
+      continue;
+    }
+
+    outputChannel.appendLine("");
+    outputChannel.appendLine(`Workspace: ${report.rootPath}`);
+    outputChannel.appendLine(formatGithubMetadataScanResult(report));
+  }
+
+  return summary;
 }
 
 function formatModeLabel(mode: HomeguardMode): string {
@@ -288,6 +338,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(formatTelemetrySummary(activation.telemetryReport.actionableChanges.length));
   }
 
+  if (activation.githubMetadataSummary && activation.githubMetadataReports) {
+    const selection = await vscode.window.showWarningMessage(
+      `${formatGithubMetadataSummary(activation.githubMetadataSummary)} Review this repository before trusting its automation.`,
+      "Open Review"
+    );
+
+    if (selection === "Open Review") {
+      writeGithubMetadataReports(outputChannel, activation.githubMetadataReports);
+      outputChannel.show(true);
+    }
+  }
+
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
     const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const targetPath = await commands.openEscapeFolder();
@@ -357,6 +419,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel.appendLine(formatWorkspaceSafetyMessage(assessment));
     outputChannel.show(true);
     await vscode.window.showInformationMessage(formatWorkspaceSafetyMessage(assessment));
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.reviewGithubAutomation", async () => {
+    const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
+    const reports = await commands.reviewGithubMetadata();
+    const summary = writeGithubMetadataReports(outputChannel, reports);
+    outputChannel.show(true);
+    await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
   }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {

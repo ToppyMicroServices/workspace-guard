@@ -15,6 +15,7 @@ import {
   type InstalledExtensionInfo,
   type TelemetryAuditReport
 } from "../core/telemetry";
+import type { GithubMetadataScanResult } from "../core/githubMetadataScanner";
 import type {
   WorkspaceSafetyActionRequest,
   WorkspaceSafetyAssessment,
@@ -52,6 +53,7 @@ export interface HomeguardExtensionHost {
   showInformationMessage?: (message: string, ...items: string[]) => Promise<string | undefined>;
   openFolder?: (targetPath: string) => Promise<void> | void;
   removeWorkspaceFolder?: (targetPath: string) => Promise<void> | void;
+  scanGithubMetadata?: (rootPath: string) => Promise<GithubMetadataScanResult>;
   onDidChangeWorkspaceFolders: (
     listener: (event: WorkspaceFoldersChangeEventLike) => void | Promise<void>
   ) => HomeguardDisposable;
@@ -73,7 +75,19 @@ export interface HandledWorkspaceDetection {
 export interface ActivationResult {
   startupDetections: HandledWorkspaceDetection[];
   telemetryReport?: TelemetryAuditReport;
+  githubMetadataReports?: GithubMetadataScanResult[];
+  githubMetadataSummary?: GithubMetadataReviewSummary;
   dispose: () => void;
+}
+
+export interface GithubMetadataReviewSummary {
+  workspaceFoldersScanned: number;
+  workspaceFoldersWithGithub: number;
+  workspaceFoldersWithRisk: number;
+  totalFindings: number;
+  highFindings: number;
+  mediumFindings: number;
+  infoFindings: number;
 }
 
 export const HOME_WARNING_ACTIONS = {
@@ -82,6 +96,43 @@ export const HOME_WARNING_ACTIONS = {
   keepOpenOnce: "Keep Open Once",
   dismiss: "Dismiss"
 } as const;
+
+export function summarizeGithubMetadataReports(
+  reports: GithubMetadataScanResult[]
+): GithubMetadataReviewSummary {
+  const summary: GithubMetadataReviewSummary = {
+    workspaceFoldersScanned: reports.length,
+    workspaceFoldersWithGithub: 0,
+    workspaceFoldersWithRisk: 0,
+    totalFindings: 0,
+    highFindings: 0,
+    mediumFindings: 0,
+    infoFindings: 0
+  };
+
+  for (const report of reports) {
+    if (report.scannedFiles.length > 0) {
+      summary.workspaceFoldersWithGithub += 1;
+    }
+
+    if (report.findings.length > 0) {
+      summary.workspaceFoldersWithRisk += 1;
+    }
+
+    summary.totalFindings += report.findings.length;
+    for (const finding of report.findings) {
+      if (finding.severity === "high") {
+        summary.highFindings += 1;
+      } else if (finding.severity === "medium") {
+        summary.mediumFindings += 1;
+      } else {
+        summary.infoFindings += 1;
+      }
+    }
+  }
+
+  return summary;
+}
 
 function createLogger(host: HomeguardExtensionHost, settings: HomeguardSettings): HomeguardLogger | undefined {
   if (!host.outputChannel) {
@@ -290,6 +341,13 @@ export async function activateHomeguardExtension(
     ? auditTelemetrySettings(host.settingsStore.getAll(), host.installedExtensions)
     : undefined;
 
+  const githubMetadataReports = settings.enable && settings.githubReview.checkOnStartup && host.scanGithubMetadata
+    ? await Promise.all(host.workspaceFolders.map(async (folder) => await host.scanGithubMetadata?.(folder.uri.fsPath)))
+    : [];
+  const githubMetadataSummary = githubMetadataReports.length > 0
+    ? summarizeGithubMetadataReports(githubMetadataReports.filter((report): report is GithubMetadataScanResult => Boolean(report)))
+    : undefined;
+
   const subscription = host.onDidChangeWorkspaceFolders(async (event) => {
     if (!settings.enable || !settings.checkOnWorkspaceFolderAdd) {
       return;
@@ -302,6 +360,12 @@ export async function activateHomeguardExtension(
   return {
     startupDetections,
     telemetryReport,
+    githubMetadataReports: githubMetadataSummary && githubMetadataSummary.workspaceFoldersWithGithub > 0
+      ? githubMetadataReports.filter((report): report is GithubMetadataScanResult => Boolean(report))
+      : undefined,
+    githubMetadataSummary: githubMetadataSummary && (githubMetadataSummary.highFindings > 0 || githubMetadataSummary.mediumFindings > 0)
+      ? githubMetadataSummary
+      : undefined,
     dispose: () => subscription.dispose()
   };
 }
@@ -316,6 +380,7 @@ export function createHomeguardCommandHandlers(
   applyPrivacyHardening: (backupDir: string) => Promise<TelemetryAuditReport & AppliedSettingsResult>;
   rollbackPrivacyHardening: (backupPath: string) => Promise<void>;
   assessWorkspaceSafety: () => Promise<WorkspaceSafetyAssessment>;
+  reviewGithubMetadata: () => Promise<GithubMetadataScanResult[]>;
   reviewWorkspaceSafetyAction: (request: WorkspaceSafetyActionRequest) => Promise<WorkspaceSafetyEvaluation>;
   runGuardedWorkspaceAction: <T>(request: WorkspaceSafetyActionRequest, execute: () => Promise<T> | T) => Promise<GuardedActionResult<T>>;
 } {
@@ -354,6 +419,15 @@ export function createHomeguardCommandHandlers(
       await rollbackTelemetryHardening(backupPath, host.settingsStore);
     },
     assessWorkspaceSafety: async () => await safetyGuard.assessWorkspace(),
+    reviewGithubMetadata: async () => {
+      if (!host.scanGithubMetadata) {
+        return [];
+      }
+
+      return (await Promise.all(
+        host.workspaceFolders.map(async (folder) => await host.scanGithubMetadata?.(folder.uri.fsPath))
+      )).filter((report): report is GithubMetadataScanResult => Boolean(report));
+    },
     reviewWorkspaceSafetyAction: async (request) => await safetyGuard.evaluateAction(request),
     runGuardedWorkspaceAction: async <T>(request: WorkspaceSafetyActionRequest, execute: () => Promise<T> | T) => {
       return await safetyGuard.runGuardedAction(request, execute);
