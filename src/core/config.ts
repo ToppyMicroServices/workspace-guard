@@ -25,6 +25,10 @@ export interface HomeguardSafetySettings {
   blockHighRiskPublish: boolean;
 }
 
+export interface HomeguardGithubReviewSettings {
+  checkOnStartup: boolean;
+}
+
 export interface HomeguardSettings {
   enable: boolean;
   mode: HomeguardMode;
@@ -37,6 +41,7 @@ export interface HomeguardSettings {
   cli: HomeguardCliSettings;
   safety: HomeguardSafetySettings;
   privacy: HomeguardPrivacySettings;
+  githubReview: HomeguardGithubReviewSettings;
   verbose: boolean;
 }
 
@@ -52,6 +57,7 @@ export interface HomeguardSettingsInput {
   cli?: Partial<HomeguardCliSettings>;
   safety?: Partial<HomeguardSafetySettings>;
   privacy?: Partial<HomeguardPrivacySettings>;
+  githubReview?: Partial<HomeguardGithubReviewSettings>;
   verbose?: boolean;
 }
 
@@ -85,6 +91,9 @@ export function getDefaultHomeguardSettings(): HomeguardSettings {
       knownTelemetryProfile: "default",
       backupBeforeApply: true
     },
+    githubReview: {
+      checkOnStartup: true
+    },
     verbose: false
   };
 }
@@ -108,6 +117,10 @@ export function resolveHomeguardSettings(input: HomeguardSettingsInput = {}): Ho
     privacy: {
       ...defaults.privacy,
       ...input.privacy
+    },
+    githubReview: {
+      ...defaults.githubReview,
+      ...input.githubReview
     }
   };
 }

