@@ -27,13 +27,14 @@ import {
   formatGithubMetadataWorkspaceLabel,
   formatGithubMetadataWorkspaceSummary
 } from "./extension/githubReviewPresentation";
+import { formatGithubFindingRemediationMarkdown } from "./extension/githubRemediation";
 
 const LAST_BACKUP_PATH_KEY = "homeguard.lastTelemetryBackupPath";
 
 type GithubReviewTreeNode =
   | { kind: "summary"; summary: GithubMetadataReviewSummary }
   | { kind: "workspace"; report: GithubMetadataScanResult }
-  | { kind: "finding"; finding: GithubMetadataFinding }
+  | { kind: "finding"; finding: GithubMetadataFinding; rootPath: string }
   | { kind: "empty"; label: string; description?: string };
 
 class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTreeNode> {
@@ -94,9 +95,9 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
       element.finding.severity === "high" ? "error" : (element.finding.severity === "medium" ? "warning" : "info")
     );
     item.command = {
-      command: "homeguard.showGithubFindingDetails",
-      title: "Show .github Finding Details",
-      arguments: [element.finding]
+      command: "homeguard.suggestGithubRemediation",
+      title: "Suggest .github Remediation",
+      arguments: [element.finding, element.rootPath]
     };
     return item;
   }
@@ -119,7 +120,7 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
         return [{ kind: "empty", label: "No findings", description: "This workspace .github review is clean." }];
       }
 
-      return element.report.findings.map((finding) => ({ kind: "finding", finding }));
+      return element.report.findings.map((finding) => ({ kind: "finding", finding, rootPath: element.report.rootPath }));
     }
 
     return [];
@@ -404,6 +405,42 @@ async function pickBackupPath(context: vscode.ExtensionContext): Promise<string 
   return selected?.[0]?.fsPath;
 }
 
+async function openGithubFindingLocation(
+  rootPath: string,
+  finding: GithubMetadataFinding
+): Promise<void> {
+  const filePath = path.join(rootPath, finding.file);
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+  const editor = await vscode.window.showTextDocument(document, { preview: false });
+  if (finding.line) {
+    const lineIndex = Math.max(0, finding.line - 1);
+    const position = new vscode.Position(lineIndex, 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+  }
+}
+
+function resolveGithubFindingCommandArgs(
+  findingOrNode: GithubMetadataFinding | GithubReviewTreeNode,
+  rootPath?: string
+): { finding: GithubMetadataFinding; rootPath?: string } | undefined {
+  if ("kind" in findingOrNode) {
+    if (findingOrNode.kind !== "finding") {
+      return undefined;
+    }
+
+    return {
+      finding: findingOrNode.finding,
+      rootPath: findingOrNode.rootPath
+    };
+  }
+
+  return {
+    finding: findingOrNode,
+    rootPath
+  };
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Workspace Guard");
   context.subscriptions.push(outputChannel);
@@ -535,13 +572,87 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
   }));
 
-  context.subscriptions.push(vscode.commands.registerCommand("homeguard.showGithubFindingDetails", async (finding: GithubMetadataFinding) => {
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.showGithubFindingDetails", async (findingOrNode: GithubMetadataFinding | GithubReviewTreeNode) => {
+    const resolved = resolveGithubFindingCommandArgs(findingOrNode);
+    if (!resolved) {
+      return;
+    }
+
+    const { finding } = resolved;
     outputChannel.appendLine(`[${finding.severity}] ${finding.id} ${finding.file}${finding.line ? `:${finding.line}` : ""} ${finding.message}`);
     outputChannel.appendLine(`Reason: ${finding.reason}`);
     outputChannel.appendLine(`Suggested action: ${finding.suggestedAction}`);
     outputChannel.appendLine("");
     outputChannel.show(true);
     await vscode.window.showWarningMessage(`${finding.message} Suggested action: ${finding.suggestedAction}`);
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.suggestGithubRemediation", async (findingOrNode: GithubMetadataFinding | GithubReviewTreeNode, rootPath?: string) => {
+    const resolved = resolveGithubFindingCommandArgs(findingOrNode, rootPath);
+    if (!resolved) {
+      return;
+    }
+
+    const { finding, rootPath: resolvedRootPath } = resolved;
+    const selection = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Show remediation guide",
+          detail: finding.suggestedAction,
+          action: "guide" as const
+        },
+        {
+          label: "Open file at finding",
+          detail: `${finding.file}${finding.line ? `:${finding.line}` : ""}`,
+          action: "open" as const
+        },
+        {
+          label: "Copy suggested action",
+          detail: finding.suggestedAction,
+          action: "copy" as const
+        },
+        {
+          label: "Show finding details",
+          detail: `${finding.id} · ${finding.reason}`,
+          action: "details" as const
+        }
+      ],
+      {
+        title: `Remediation for ${finding.id}`,
+        placeHolder: finding.message
+      }
+    );
+
+    if (!selection) {
+      return;
+    }
+
+    if (selection.action === "open") {
+      if (!resolvedRootPath) {
+        await vscode.window.showWarningMessage("Workspace Guard could not resolve the file path for this finding.");
+        return;
+      }
+
+      await openGithubFindingLocation(resolvedRootPath, finding);
+      return;
+    }
+
+    if (selection.action === "copy") {
+      await vscode.env.clipboard.writeText(finding.suggestedAction);
+      await vscode.window.showInformationMessage("Workspace Guard copied the suggested action.");
+      return;
+    }
+
+    if (selection.action === "details") {
+      await vscode.commands.executeCommand("homeguard.showGithubFindingDetails", finding);
+      return;
+    }
+
+    const document = await vscode.workspace.openTextDocument({
+      content: formatGithubFindingRemediationMarkdown(finding),
+      language: "markdown"
+    });
+    await vscode.window.showTextDocument(document, { preview: false });
   }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async () => {
