@@ -43,7 +43,10 @@
     "onCommand:homeguard.assessWorkspaceSafety",
     "onCommand:homeguard.reviewGithubAutomation",
     "onCommand:homeguard.refreshGithubAutomationReview",
-    "onCommand:homeguard.suggestGithubRemediation"
+    "onCommand:homeguard.suggestGithubRemediation",
+    "onCommand:homeguard.setGithubReviewSeverityFilter",
+    "onCommand:homeguard.exportGithubReviewJson",
+    "onCommand:homeguard.exportGithubReviewMarkdown"
   ],
   "contributes": {
     "commands": [
@@ -101,6 +104,21 @@
         "command": "homeguard.showGithubFindingDetails",
         "title": "Show .github Finding Details",
         "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.setGithubReviewSeverityFilter",
+        "title": "Set .github Review Filter",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.exportGithubReviewJson",
+        "title": "Export .github Review as JSON",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.exportGithubReviewMarkdown",
+        "title": "Export .github Review as Markdown",
+        "category": "Workspace Guard"
       }
     ],
     "views": {
@@ -117,6 +135,16 @@
           "command": "homeguard.refreshGithubAutomationReview",
           "when": "view == workspaceGuardReview",
           "group": "navigation"
+        },
+        {
+          "command": "homeguard.setGithubReviewSeverityFilter",
+          "when": "view == workspaceGuardReview",
+          "group": "navigation@1"
+        },
+        {
+          "command": "homeguard.exportGithubReviewMarkdown",
+          "when": "view == workspaceGuardReview",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
@@ -129,6 +157,16 @@
           "command": "homeguard.showGithubFindingDetails",
           "when": "view == workspaceGuardReview && viewItem =~ /^workspaceGuardGithubReview\\.finding\\./",
           "group": "navigation"
+        },
+        {
+          "command": "homeguard.exportGithubReviewJson",
+          "when": "view == workspaceGuardReview && viewItem == workspaceGuardGithubReview.summary",
+          "group": "navigation@1"
+        },
+        {
+          "command": "homeguard.exportGithubReviewMarkdown",
+          "when": "view == workspaceGuardReview && viewItem == workspaceGuardGithubReview.summary",
+          "group": "navigation@2"
         }
       ]
     },
