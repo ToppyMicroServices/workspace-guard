@@ -7,6 +7,7 @@ import { type HomeguardMode, type HomeguardSettingsInput } from "./core/config";
 import {
   formatGithubMetadataScanResult,
   scanGithubMetadata,
+  type GithubMetadataFinding,
   type GithubMetadataScanResult
 } from "./core/githubMetadataScanner";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
@@ -19,8 +20,111 @@ import {
   type HomeguardExtensionHost,
   type WorkspaceFolderLike
 } from "./extension/homeguardExtension";
+import {
+  formatGithubFindingDescription,
+  formatGithubFindingTooltip,
+  formatGithubMetadataSummary,
+  formatGithubMetadataWorkspaceLabel,
+  formatGithubMetadataWorkspaceSummary
+} from "./extension/githubReviewPresentation";
 
 const LAST_BACKUP_PATH_KEY = "homeguard.lastTelemetryBackupPath";
+
+type GithubReviewTreeNode =
+  | { kind: "summary"; summary: GithubMetadataReviewSummary }
+  | { kind: "workspace"; report: GithubMetadataScanResult }
+  | { kind: "finding"; finding: GithubMetadataFinding }
+  | { kind: "empty"; label: string; description?: string };
+
+class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTreeNode> {
+  private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<GithubReviewTreeNode | undefined>();
+
+  private reports: GithubMetadataScanResult[] = [];
+
+  public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
+
+  public setReports(reports: GithubMetadataScanResult[]): void {
+    this.reports = reports;
+    this.onDidChangeTreeDataEmitter.fire(undefined);
+  }
+
+  public getTreeItem(element: GithubReviewTreeNode): vscode.TreeItem {
+    if (element.kind === "empty") {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+      item.description = element.description;
+      item.contextValue = "workspaceGuardGithubReview.empty";
+      item.iconPath = new vscode.ThemeIcon("info");
+      return item;
+    }
+
+    if (element.kind === "summary") {
+      const item = new vscode.TreeItem(
+        element.summary.totalFindings === 0 ? "No .github risks" : `${element.summary.totalFindings} .github findings`,
+        vscode.TreeItemCollapsibleState.None
+      );
+      item.description = element.summary.totalFindings === 0
+        ? `${element.summary.workspaceFoldersWithGithub} workspace folder${element.summary.workspaceFoldersWithGithub === 1 ? "" : "s"} with .github`
+        : formatGithubMetadataSummary(element.summary);
+      item.tooltip = formatGithubMetadataSummary(element.summary);
+      item.contextValue = "workspaceGuardGithubReview.summary";
+      item.iconPath = new vscode.ThemeIcon(element.summary.highFindings > 0 ? "warning" : "shield");
+      return item;
+    }
+
+    if (element.kind === "workspace") {
+      const collapsibleState = element.report.findings.length > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None;
+      const item = new vscode.TreeItem(
+        formatGithubMetadataWorkspaceLabel(element.report),
+        collapsibleState
+      );
+      item.description = formatGithubMetadataWorkspaceSummary(element.report);
+      item.tooltip = `${element.report.rootPath}\n${formatGithubMetadataWorkspaceSummary(element.report)}`;
+      item.contextValue = "workspaceGuardGithubReview.workspace";
+      item.iconPath = new vscode.ThemeIcon("repo");
+      return item;
+    }
+
+    const item = new vscode.TreeItem(element.finding.message, vscode.TreeItemCollapsibleState.None);
+    item.description = formatGithubFindingDescription(element.finding);
+    item.tooltip = formatGithubFindingTooltip(element.finding);
+    item.contextValue = `workspaceGuardGithubReview.finding.${element.finding.severity}`;
+    item.iconPath = new vscode.ThemeIcon(
+      element.finding.severity === "high" ? "error" : (element.finding.severity === "medium" ? "warning" : "info")
+    );
+    item.command = {
+      command: "homeguard.showGithubFindingDetails",
+      title: "Show .github Finding Details",
+      arguments: [element.finding]
+    };
+    return item;
+  }
+
+  public getChildren(element?: GithubReviewTreeNode): GithubReviewTreeNode[] {
+    if (!element) {
+      const scannedReports = this.reports.filter((report) => report.scannedFiles.length > 0);
+      if (scannedReports.length === 0) {
+        return [{ kind: "empty", label: "No .github files in the current workspace." }];
+      }
+
+      return [
+        { kind: "summary", summary: summarizeGithubMetadataReports(scannedReports) },
+        ...scannedReports.map((report) => ({ kind: "workspace", report } as const))
+      ];
+    }
+
+    if (element.kind === "workspace") {
+      if (element.report.findings.length === 0) {
+        return [{ kind: "empty", label: "No findings", description: "This workspace .github review is clean." }];
+      }
+
+      return element.report.findings.map((finding) => ({ kind: "finding", finding }));
+    }
+
+    return [];
+  }
+}
 
 class VSCodeSettingsStore implements SettingsStore {
   private readonly keys: readonly string[];
@@ -163,25 +267,6 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
     `High-risk folders: ${assessment.highRiskFolders.length}`
   ];
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
-}
-
-function formatGithubMetadataSummary(summary: GithubMetadataReviewSummary): string {
-  if (summary.totalFindings === 0) {
-    return "Workspace Guard found no .github risks in the current workspace.";
-  }
-
-  const severityParts: string[] = [];
-  if (summary.highFindings > 0) {
-    severityParts.push(`${summary.highFindings} high`);
-  }
-  if (summary.mediumFindings > 0) {
-    severityParts.push(`${summary.mediumFindings} medium`);
-  }
-  if (summary.infoFindings > 0) {
-    severityParts.push(`${summary.infoFindings} info`);
-  }
-
-  return `Workspace Guard found ${summary.totalFindings} .github finding${summary.totalFindings === 1 ? "" : "s"} across ${summary.workspaceFoldersWithRisk} workspace folder${summary.workspaceFoldersWithRisk === 1 ? "" : "s"} (${severityParts.join(", ")}).`;
 }
 
 function writeGithubMetadataReports(
@@ -328,6 +413,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({
     dispose: () => activation.dispose()
   });
+  const githubReviewTreeProvider = new GithubReviewTreeProvider();
+  const githubReviewTreeView = vscode.window.createTreeView("workspaceGuardReview", {
+    treeDataProvider: githubReviewTreeProvider,
+    showCollapseAll: true
+  });
+  context.subscriptions.push(githubReviewTreeView);
+
+  const refreshGithubReviewTree = async (reports?: GithubMetadataScanResult[]): Promise<GithubMetadataScanResult[]> => {
+    const nextReports = reports ?? await createHomeguardCommandHandlers(host, getHomeguardSettings()).reviewGithubMetadata();
+    githubReviewTreeProvider.setReports(nextReports);
+    return nextReports;
+  };
 
   const protectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   protectionStatusBarItem.command = "homeguard.setMode";
@@ -349,6 +446,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       outputChannel.show(true);
     }
   }
+
+  await refreshGithubReviewTree(activation.githubMetadataReports);
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
     const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
@@ -424,9 +523,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.reviewGithubAutomation", async () => {
     const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
     const reports = await commands.reviewGithubMetadata();
+    githubReviewTreeProvider.setReports(reports);
     const summary = writeGithubMetadataReports(outputChannel, reports);
     outputChannel.show(true);
     await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.refreshGithubAutomationReview", async () => {
+    const reports = await refreshGithubReviewTree();
+    const summary = summarizeGithubMetadataReports(reports.filter((report) => report.scannedFiles.length > 0));
+    await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.showGithubFindingDetails", async (finding: GithubMetadataFinding) => {
+    outputChannel.appendLine(`[${finding.severity}] ${finding.id} ${finding.file}${finding.line ? `:${finding.line}` : ""} ${finding.message}`);
+    outputChannel.appendLine(`Reason: ${finding.reason}`);
+    outputChannel.appendLine(`Suggested action: ${finding.suggestedAction}`);
+    outputChannel.appendLine("");
+    outputChannel.show(true);
+    await vscode.window.showWarningMessage(`${finding.message} Suggested action: ${finding.suggestedAction}`);
+  }));
+
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+    await refreshGithubReviewTree();
   }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
@@ -437,6 +556,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     updateProtectionStatusBarItem(protectionStatusBarItem);
     activation.dispose();
     activation = await activateHomeguardExtension(host, getHomeguardSettings());
+    await refreshGithubReviewTree(activation.githubMetadataReports);
   }));
 }
 
