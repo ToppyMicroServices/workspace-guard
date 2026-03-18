@@ -42,7 +42,8 @@
     "onCommand:homeguard.rollbackPrivacyHardening",
     "onCommand:homeguard.assessWorkspaceSafety",
     "onCommand:homeguard.reviewGithubAutomation",
-    "onCommand:homeguard.refreshGithubAutomationReview"
+    "onCommand:homeguard.refreshGithubAutomationReview",
+    "onCommand:homeguard.suggestGithubRemediation"
   ],
   "contributes": {
     "commands": [
@@ -90,6 +91,16 @@
         "command": "homeguard.refreshGithubAutomationReview",
         "title": "Refresh .github Review",
         "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.suggestGithubRemediation",
+        "title": "Suggest .github Remediation",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.showGithubFindingDetails",
+        "title": "Show .github Finding Details",
+        "category": "Workspace Guard"
       }
     ],
     "views": {
@@ -105,6 +116,18 @@
         {
           "command": "homeguard.refreshGithubAutomationReview",
           "when": "view == workspaceGuardReview",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "homeguard.suggestGithubRemediation",
+          "when": "view == workspaceGuardReview && viewItem =~ /^workspaceGuardGithubReview\\.finding\\./",
+          "group": "inline"
+        },
+        {
+          "command": "homeguard.showGithubFindingDetails",
+          "when": "view == workspaceGuardReview && viewItem =~ /^workspaceGuardGithubReview\\.finding\\./",
           "group": "navigation"
         }
       ]
