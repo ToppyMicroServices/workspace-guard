@@ -315,6 +315,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:smoke": "node dist/tests/smoke/runTest.js",
     "vscode:prepublish": "npm run build",
     "package:extension": "vsce package",
     "publish:extension": "vsce publish",
@@ -331,6 +332,7 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/vscode": "^1.110.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.7.1",
     "fast-check": "^4.3.0",
     "typescript": "^5.9.3",

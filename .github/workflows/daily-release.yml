@@ -49,6 +49,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Run Extension Development Host smoke test
+        run: xvfb-run -a npm run test:smoke
+
       - name: Package extension
         run: npm run package:extension -- --out workspace-guard.vsix
 
@@ -231,4 +234,3 @@ jobs:
             --name workspace-guard \
             --version "$DAILY_VERSION" \
             --mode universal
-

