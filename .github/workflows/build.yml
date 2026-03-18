@@ -41,3 +41,7 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Run Extension Development Host smoke test
+        if: matrix.os == 'ubuntu-latest'
+        run: xvfb-run -a npm run test:smoke

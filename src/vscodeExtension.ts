@@ -45,6 +45,20 @@ type GithubReviewTreeNode =
   | { kind: "finding"; finding: GithubMetadataFinding; rootPath: string }
   | { kind: "empty"; label: string; description?: string };
 
+interface GithubReviewTreeSnapshotNode {
+  kind: GithubReviewTreeNode["kind"];
+  label: string;
+  description?: string | boolean;
+  contextValue?: string;
+  children?: GithubReviewTreeSnapshotNode[];
+}
+
+interface GithubReviewTreeSnapshot {
+  filter: GithubReviewSeverityFilter;
+  summary: GithubMetadataReviewSummary;
+  nodes: GithubReviewTreeSnapshotNode[];
+}
+
 class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTreeNode> {
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<GithubReviewTreeNode | undefined>();
 
@@ -534,6 +548,43 @@ function resolveGithubFindingCommandArgs(
   };
 }
 
+function getTreeItemLabel(item: vscode.TreeItem): string {
+  if (typeof item.label === "string") {
+    return item.label;
+  }
+
+  return item.label?.label ?? "";
+}
+
+function captureGithubReviewTreeNode(
+  provider: GithubReviewTreeProvider,
+  node: GithubReviewTreeNode
+): GithubReviewTreeSnapshotNode {
+  const item = provider.getTreeItem(node);
+  const children = provider.getChildren(node);
+
+  return {
+    kind: node.kind,
+    label: getTreeItemLabel(item),
+    description: item.description,
+    contextValue: item.contextValue,
+    children: children.length > 0
+      ? children.map((child) => captureGithubReviewTreeNode(provider, child))
+      : undefined
+  };
+}
+
+function captureGithubReviewTreeSnapshot(
+  provider: GithubReviewTreeProvider
+): GithubReviewTreeSnapshot {
+  const reports = provider.getReports();
+  return {
+    filter: provider.getFilter(),
+    summary: summarizeGithubMetadataReports(reports),
+    nodes: provider.getChildren().map((node) => captureGithubReviewTreeNode(provider, node))
+  };
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Workspace Guard");
   context.subscriptions.push(outputChannel);
@@ -717,6 +768,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (targetUri) {
       await vscode.window.showInformationMessage(`Workspace Guard exported Markdown review to ${targetUri.fsPath}.`);
     }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.__captureGithubReviewTree", async () => {
+    return captureGithubReviewTreeSnapshot(githubReviewTreeProvider);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.showGithubFindingDetails", async (findingOrNode: GithubMetadataFinding | GithubReviewTreeNode) => {
