@@ -1,7 +1,7 @@
 # Workspace Guard
 
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ToppyMicroServices/workspace-guard/badge)](https://securityscorecards.dev/viewer/?uri=github.com/ToppyMicroServices/workspace-guard)
-[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-in%20progress-lightgrey)](https://github.com/ToppyMicroServices/workspace-guard/blob/main/docs/openssf-best-practices.md)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12215/badge)](https://www.bestpractices.dev/projects/12215)
 
 Prevent accidental home-directory opens in VS Code and review risky `.github` automation before trusting a repository.
 
