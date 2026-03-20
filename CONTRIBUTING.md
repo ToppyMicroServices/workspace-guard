@@ -2,6 +2,28 @@
 
 Thanks for helping improve Workspace Guard.
 
+## Contribution Requirements
+
+Acceptable contributions should follow these project requirements:
+
+- Keep changes focused on one problem or feature.
+- Preserve the project's privacy-first and offline-first behavior by default.
+- Do not add telemetry, phone-home behavior, background network access, or remote execution without an explicit opt-in and clear documentation.
+- Add or update tests when behavior changes.
+- Update user-facing docs when commands, UI, settings, or review behavior change.
+- Keep GitHub Actions pinned and use least-privilege permissions.
+- Explain security, trust, or workflow risk clearly in the pull request when a change affects `.github`, shell execution, workspace safety, settings backup, or secrets handling.
+
+## Coding Standard
+
+Please follow these implementation expectations:
+
+- Write TypeScript that matches the existing project style and naming patterns.
+- Prefer small, readable functions over broad refactors.
+- Keep changes compatible with the project's current Node and VS Code engine requirements.
+- Avoid unnecessary dependencies.
+- Prefer deterministic tests and keep smoke-test coverage passing when Explorer or command flows change.
+
 ## Development Flow
 
 1. Create a branch from `main`.
