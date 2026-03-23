@@ -49,6 +49,7 @@ The extension produces output through:
 - notifications and warnings in VS Code
 - the `WG:` status bar control
 - the `Workspace Guard Review` Explorer tree
+- Problems entries and diagnostics for risky repository config in restricted mode
 - output panel review summaries
 - exported `.github` review reports in JSON or Markdown
 - workspace actions such as redirecting to an escape folder or removing risky folders from the workspace
@@ -79,16 +80,21 @@ Output:
 Input:
 
 - a repository or workspace path
+- optional `--format text|json` to control terminal output
+- optional `--profile default|restricted` to tune local config severity in advisory vs restricted mode
+- optional `--fail-on none|high|medium|info` to control the exit threshold
 - optional `--resolve-external-workflows` to fetch referenced reusable workflows for deeper inspection
 
 Behavior:
 
 - scans `.github/workflows/*.yml`, `dependabot.yml`, `CODEOWNERS`, and issue or pull request templates
-- evaluates workflow and repository metadata risks
+- scans `tasks.json`, `launch.json`, `mcp.json`, `settings.json`, and `*.code-workspace`
+- evaluates workflow, repository metadata, and local execution-surface risks
 
 Output:
 
 - terminal review output with findings grouped by severity
+- JSON output for automation or CI consumption when `--format json` is used
 - JSON or Markdown content when exported through the extension workflow
 
 ## Repository Interface

@@ -10,6 +10,11 @@ import {
   type GithubMetadataFinding,
   type GithubMetadataScanResult
 } from "./core/githubMetadataScanner";
+import {
+  isRepositorySafetyRelevantPath,
+  scanRepositorySafety,
+  type RepositorySafetyScanResult
+} from "./core/repositorySafetyScanner";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
 import type { SettingsStore } from "./core/settingsBackup";
 import {
@@ -20,6 +25,7 @@ import {
   type HomeguardExtensionHost,
   type WorkspaceFolderLike
 } from "./extension/homeguardExtension";
+import { buildRepositoryDiagnostics, type RepositoryDiagnosticItem } from "./extension/repositoryDiagnostics";
 import {
   formatGithubFindingDescription,
   formatGithubFindingTooltip,
@@ -365,6 +371,79 @@ function writeGithubMetadataReports(
   return summary;
 }
 
+function toDiagnosticSeverity(severity: RepositoryDiagnosticItem["severity"]): vscode.DiagnosticSeverity {
+  switch (severity) {
+    case "error":
+      return vscode.DiagnosticSeverity.Error;
+    case "warning":
+      return vscode.DiagnosticSeverity.Warning;
+    case "information":
+      return vscode.DiagnosticSeverity.Information;
+  }
+}
+
+function createRepositoryDiagnostics(
+  document: vscode.TextDocument,
+  diagnostics: RepositoryDiagnosticItem[]
+): vscode.Diagnostic[] {
+  return diagnostics.map((item) => {
+    const lineIndex = Math.max(0, (item.line ?? 1) - 1);
+    const rangeLine = Math.min(lineIndex, Math.max(0, document.lineCount - 1));
+    const line = document.lineAt(rangeLine);
+    const range = new vscode.Range(rangeLine, 0, rangeLine, line.text.length);
+    const diagnostic = new vscode.Diagnostic(range, item.message, toDiagnosticSeverity(item.severity));
+    diagnostic.source = item.source;
+    diagnostic.code = item.code;
+    return diagnostic;
+  });
+}
+
+async function applyRepositoryDiagnosticsForWorkspace(
+  workspaceFolder: vscode.WorkspaceFolder,
+  diagnosticCollection: vscode.DiagnosticCollection,
+  trackedFiles: Map<string, string[]>
+): Promise<RepositorySafetyScanResult> {
+  const report = await scanRepositorySafety(workspaceFolder.uri.fsPath, {
+    profile: "restricted",
+    resolveExternalWorkflows: false
+  });
+  const groupedDiagnostics = buildRepositoryDiagnostics(report);
+  const nextFiles = [...groupedDiagnostics.keys()];
+  const previousFiles = trackedFiles.get(workspaceFolder.uri.fsPath) ?? [];
+
+  for (const relativePath of previousFiles) {
+    if (!groupedDiagnostics.has(relativePath)) {
+      diagnosticCollection.delete(vscode.Uri.file(path.join(workspaceFolder.uri.fsPath, relativePath)));
+    }
+  }
+
+  for (const [relativePath, diagnostics] of groupedDiagnostics.entries()) {
+    const targetUri = vscode.Uri.file(path.join(workspaceFolder.uri.fsPath, relativePath));
+    const document = await vscode.workspace.openTextDocument(targetUri);
+    diagnosticCollection.set(targetUri, createRepositoryDiagnostics(document, diagnostics));
+  }
+
+  trackedFiles.set(workspaceFolder.uri.fsPath, nextFiles);
+  return report;
+}
+
+async function refreshRepositoryDiagnostics(
+  diagnosticCollection: vscode.DiagnosticCollection,
+  trackedFiles: Map<string, string[]>
+): Promise<void> {
+  for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+    await applyRepositoryDiagnosticsForWorkspace(workspaceFolder, diagnosticCollection, trackedFiles);
+  }
+}
+
+function getContainingWorkspaceFolder(filePath: string): vscode.WorkspaceFolder | undefined {
+  const candidates = vscode.workspace.workspaceFolders ?? [];
+  return candidates.find((workspaceFolder) => {
+    const relativePath = path.relative(workspaceFolder.uri.fsPath, filePath);
+    return relativePath !== "" && !relativePath.startsWith("..");
+  });
+}
+
 function formatModeLabel(mode: HomeguardMode): string {
   switch (mode) {
     case "warn":
@@ -588,6 +667,9 @@ function captureGithubReviewTreeSnapshot(
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Workspace Guard");
   context.subscriptions.push(outputChannel);
+  const repositoryDiagnostics = vscode.languages.createDiagnosticCollection("workspace-guard");
+  const trackedDiagnosticFiles = new Map<string, string[]>();
+  context.subscriptions.push(repositoryDiagnostics);
 
   const host = createHost(outputChannel);
   let activation = await activateHomeguardExtension(host, getHomeguardSettings());
@@ -632,6 +714,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   await refreshGithubReviewTree(activation.githubMetadataReports);
+  await refreshRepositoryDiagnostics(repositoryDiagnostics, trackedDiagnosticFiles);
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
     const commands = createHomeguardCommandHandlers(host, getHomeguardSettings());
@@ -876,6 +959,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async () => {
     await refreshGithubReviewTree();
+    await refreshRepositoryDiagnostics(repositoryDiagnostics, trackedDiagnosticFiles);
+  }));
+
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(async (document) => {
+    const workspaceFolder = getContainingWorkspaceFolder(document.uri.fsPath);
+    if (!workspaceFolder) {
+      return;
+    }
+
+    if (!isRepositorySafetyRelevantPath(workspaceFolder.uri.fsPath, document.uri.fsPath)) {
+      return;
+    }
+
+    await applyRepositoryDiagnosticsForWorkspace(workspaceFolder, repositoryDiagnostics, trackedDiagnosticFiles);
   }));
 
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (event) => {
@@ -887,6 +984,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activation.dispose();
     activation = await activateHomeguardExtension(host, getHomeguardSettings());
     await refreshGithubReviewTree(activation.githubMetadataReports);
+    await refreshRepositoryDiagnostics(repositoryDiagnostics, trackedDiagnosticFiles);
   }));
 }
 
