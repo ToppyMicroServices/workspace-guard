@@ -1,6 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -9,8 +8,7 @@ import {
   scanRepositorySafety,
   type RepositorySafetyScanResult
 } from "../src";
-
-const tempDirs: string[] = [];
+import { cleanupWorkspaceSandboxes, createWorkspaceSandbox } from "./helpers/workspaceSandbox";
 
 async function writeRepoFile(rootPath: string, relativePath: string, content: string): Promise<void> {
   const targetPath = path.join(rootPath, relativePath);
@@ -19,15 +17,12 @@ async function writeRepoFile(rootPath: string, relativePath: string, content: st
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map(async (dirPath) => {
-    await rm(dirPath, { recursive: true, force: true });
-  }));
+  await cleanupWorkspaceSandboxes();
 });
 
 describe("repository diagnostics consistency", () => {
   it("keeps CLI JSON and diagnostics aligned on finding ids", async () => {
-    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-diag-"));
-    tempDirs.push(rootPath);
+    const rootPath = await createWorkspaceSandbox("workspace-guard-diag");
     await writeRepoFile(rootPath, ".github/workflows/release.yml", `name: release
 on:
   workflow_dispatch:

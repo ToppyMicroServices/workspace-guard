@@ -26,7 +26,20 @@ npx workspace-guard-scan .
 
 Use `homeguard-code` if you want the `code` command to check risky paths before opening VS Code. Use `workspace-guard-scan` if you want a quick safety review of a repository's `.github` automation and workspace execution surfaces before you trust it.
 
-If you want JSON output, stricter restricted-mode heuristics, or a custom exit threshold, use `--format json`, `--profile restricted`, and `--fail-on <none|high|medium|info>`. If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it fetches the referenced workflow files.
+If you want JSON or SARIF output, stricter restricted-mode heuristics, a custom exit threshold, or an explicit policy file, use `--format json|sarif`, `--profile restricted`, `--fail-on <none|high|medium|info>`, and `--policy <path>`. If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it fetches the referenced workflow files.
+
+## Repository Policy
+
+Workspace Guard can auto-load a repository policy from `.workspace-guard/policy.jsonc`, `.workspace-guard/policy.json`, `workspace-guard.policy.jsonc`, or `workspace-guard.policy.json`.
+
+The policy can:
+
+- set the default repository scan profile
+- set the default fail threshold
+- allowlist specific finding IDs or file-specific findings
+- allowlist policy-related extension commands
+
+Use `Workspace Guard: Open Repository Policy File` to create or edit the default policy file from VS Code.
 
 Project docs: [External interface](https://github.com/ToppyMicroServices/workspace-guard/blob/main/docs/external-interface.md) · [Contributing](https://github.com/ToppyMicroServices/workspace-guard/blob/main/CONTRIBUTING.md) · [Support](https://github.com/ToppyMicroServices/workspace-guard/blob/main/SUPPORT.md) · [Security](https://github.com/ToppyMicroServices/workspace-guard/blob/main/.github/SECURITY.md) · [OpenSSF readiness](https://github.com/ToppyMicroServices/workspace-guard/blob/main/docs/openssf-best-practices.md)
 

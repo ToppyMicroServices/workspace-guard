@@ -15,6 +15,13 @@ import {
   scanRepositorySafety,
   type RepositorySafetyScanResult
 } from "./core/repositorySafetyScanner";
+import {
+  formatDefaultRepositoryPolicy,
+  getDefaultRepositoryPolicyPath,
+  isCommandAllowedByRepositoryPolicy,
+  loadRepositoryPolicy
+} from "./core/repositoryPolicy";
+import { formatRepositorySafetySarif } from "./core/repositorySafetySarif";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
 import type { SettingsStore } from "./core/settingsBackup";
 import {
@@ -351,6 +358,87 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
 }
 
+function getRepositoryScanSettings(): {
+  profile: "default" | "restricted";
+  failOn: "none" | "high" | "medium" | "info";
+  enableDiagnostics: boolean;
+} {
+  const configuration = vscode.workspace.getConfiguration("homeguard");
+  return {
+    profile: configuration.get<"default" | "restricted">("repositoryScan.profile", "restricted"),
+    failOn: configuration.get<"none" | "high" | "medium" | "info">("repositoryScan.failOn", "medium"),
+    enableDiagnostics: configuration.get<boolean>("repositoryScan.enableDiagnostics", true)
+  };
+}
+
+async function scanWorkspaceFolderRepositorySafety(
+  workspaceFolder: vscode.WorkspaceFolder
+): Promise<RepositorySafetyScanResult> {
+  const settings = getRepositoryScanSettings();
+  return await scanRepositorySafety(workspaceFolder.uri.fsPath, {
+    profile: settings.profile
+  });
+}
+
+async function scanCurrentWorkspaceRepositorySafety(): Promise<RepositorySafetyScanResult[]> {
+  return await Promise.all((vscode.workspace.workspaceFolders ?? []).map(async (workspaceFolder) => await scanWorkspaceFolderRepositorySafety(workspaceFolder)));
+}
+
+function formatRepositorySafetySummary(result: RepositorySafetyScanResult): string {
+  const summary = result.summary;
+  if (summary.totalFindings === 0) {
+    return `${path.basename(result.rootPath)}: no repository safety findings.`;
+  }
+
+  return `${path.basename(result.rootPath)}: ${summary.highFindings} high, ${summary.mediumFindings} medium, ${summary.infoFindings} info findings.`;
+}
+
+function formatRepositorySafetyCopilotPrompt(results: RepositorySafetyScanResult[]): string {
+  const lines = [
+    "Review this repository safety report.",
+    "Focus on behavior-changing risks, trust boundaries, and the smallest remediation that reduces exposure.",
+    ""
+  ];
+
+  for (const result of results) {
+    lines.push(`Workspace: ${result.rootPath}`);
+    lines.push(formatRepositorySafetySummary(result));
+    for (const finding of result.findings) {
+      lines.push(`- [${finding.severity}] ${finding.id} ${finding.file}${finding.line ? `:${finding.line}` : ""} ${finding.message}`);
+      lines.push(`  Suggested action: ${finding.suggestedAction}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+async function ensureRepositoryCommandAllowed(commandId: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<boolean> {
+  if (!workspaceFolder) {
+    return true;
+  }
+
+  const loadedPolicy = await loadRepositoryPolicy(workspaceFolder.uri.fsPath);
+  if (isCommandAllowedByRepositoryPolicy(commandId, loadedPolicy.policy)) {
+    return true;
+  }
+
+  await vscode.window.showWarningMessage(`Repository policy does not allow the command ${commandId}.`);
+  return false;
+}
+
+async function ensureRepositoryPolicyFile(workspaceFolder: vscode.WorkspaceFolder): Promise<string> {
+  const targetPath = getDefaultRepositoryPolicyPath(workspaceFolder.uri.fsPath);
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(targetPath));
+  } catch {
+    await vscode.workspace.fs.writeFile(vscode.Uri.file(targetPath), new TextEncoder().encode(formatDefaultRepositoryPolicy()));
+  }
+
+  return targetPath;
+}
+
 function writeGithubMetadataReports(
   outputChannel: vscode.OutputChannel,
   reports: GithubMetadataScanResult[]
@@ -403,8 +491,9 @@ async function applyRepositoryDiagnosticsForWorkspace(
   diagnosticCollection: vscode.DiagnosticCollection,
   trackedFiles: Map<string, string[]>
 ): Promise<RepositorySafetyScanResult> {
+  const repositorySettings = getRepositoryScanSettings();
   const report = await scanRepositorySafety(workspaceFolder.uri.fsPath, {
-    profile: "restricted",
+    profile: repositorySettings.profile,
     resolveExternalWorkflows: false
   });
   const groupedDiagnostics = buildRepositoryDiagnostics(report);
@@ -431,6 +520,12 @@ async function refreshRepositoryDiagnostics(
   diagnosticCollection: vscode.DiagnosticCollection,
   trackedFiles: Map<string, string[]>
 ): Promise<void> {
+  if (!getRepositoryScanSettings().enableDiagnostics) {
+    diagnosticCollection.clear();
+    trackedFiles.clear();
+    return;
+  }
+
   for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
     await applyRepositoryDiagnosticsForWorkspace(workspaceFolder, diagnosticCollection, trackedFiles);
   }
@@ -574,8 +669,9 @@ async function openGithubFindingLocation(
   }
 }
 
-function getDefaultGithubExportUri(
+function getDefaultExportUri(
   context: vscode.ExtensionContext,
+  prefix: string,
   extension: string
 ): vscode.Uri | undefined {
   const baseUri = vscode.workspace.workspaceFolders?.[0]?.uri;
@@ -583,20 +679,23 @@ function getDefaultGithubExportUri(
     return undefined;
   }
 
-  return vscode.Uri.joinPath(baseUri, `workspace-guard-github-review.${extension}`);
+  return vscode.Uri.joinPath(baseUri, `${prefix}.${extension}`);
 }
 
-async function exportGithubReviewContent(
+async function exportReviewContent(
   context: vscode.ExtensionContext,
   content: string,
-  extension: string
+  extension: string,
+  prefix: string
 ): Promise<vscode.Uri | undefined> {
   const targetUri = await vscode.window.showSaveDialog({
     saveLabel: "Export Workspace Guard review",
-    defaultUri: getDefaultGithubExportUri(context, extension),
+    defaultUri: getDefaultExportUri(context, prefix, extension),
     filters: extension === "json"
       ? { JSON: ["json"] }
-      : { Markdown: ["md"] }
+      : extension === "sarif"
+        ? { SARIF: ["sarif"] }
+        : { Markdown: ["md"] }
   });
   if (!targetUri) {
     return undefined;
@@ -796,6 +895,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showInformationMessage(formatGithubMetadataSummary(summary));
   }));
 
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.reviewRepositorySafety", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder && !await ensureRepositoryCommandAllowed("homeguard.reviewRepositorySafety", workspaceFolder)) {
+      return;
+    }
+
+    const reports = await scanCurrentWorkspaceRepositorySafety();
+    for (const report of reports) {
+      outputChannel.appendLine(formatRepositorySafetySummary(report));
+      outputChannel.appendLine(JSON.stringify(report.summary));
+      outputChannel.appendLine("");
+    }
+    outputChannel.show(true);
+    await vscode.window.showInformationMessage(reports.length === 0
+      ? "Workspace Guard found no workspace folders to scan."
+      : reports.map((report) => formatRepositorySafetySummary(report)).join(" | "));
+  }));
+
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.refreshGithubAutomationReview", async () => {
     const reports = await refreshGithubReviewTree();
     const summary = summarizeGithubMetadataReports(
@@ -835,7 +952,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       trust: formatGithubTrustLabel(summarizeGithubMetadataReports(reports)),
       reports: reports.map((report) => filterGithubMetadataReport(report, filter))
     }, null, 2);
-    const targetUri = await exportGithubReviewContent(context, content, "json");
+    const targetUri = await exportReviewContent(context, content, "json", "workspace-guard-github-review");
     if (targetUri) {
       await vscode.window.showInformationMessage(`Workspace Guard exported JSON review to ${targetUri.fsPath}.`);
     }
@@ -847,10 +964,88 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const filteredReports = reports.map((report) => filterGithubMetadataReport(report, filter));
     const summary = summarizeGithubMetadataReports(filteredReports);
     const content = formatGithubMetadataReportsMarkdown(filteredReports, summary, filter);
-    const targetUri = await exportGithubReviewContent(context, content, "md");
+    const targetUri = await exportReviewContent(context, content, "md", "workspace-guard-github-review");
     if (targetUri) {
       await vscode.window.showInformationMessage(`Workspace Guard exported Markdown review to ${targetUri.fsPath}.`);
     }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.exportRepositorySafetyJson", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder && !await ensureRepositoryCommandAllowed("homeguard.exportRepositorySafetyJson", workspaceFolder)) {
+      return;
+    }
+
+    const reports = await scanCurrentWorkspaceRepositorySafety();
+    const targetUri = await exportReviewContent(context, JSON.stringify(reports, null, 2), "json", "workspace-guard-repository-safety");
+    if (targetUri) {
+      await vscode.window.showInformationMessage(`Workspace Guard exported repository safety JSON to ${targetUri.fsPath}.`);
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.exportRepositorySafetySarif", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder && !await ensureRepositoryCommandAllowed("homeguard.exportRepositorySafetySarif", workspaceFolder)) {
+      return;
+    }
+
+    const reports = await scanCurrentWorkspaceRepositorySafety();
+    const content = reports.length === 1
+      ? formatRepositorySafetySarif(reports[0])
+      : JSON.stringify(reports.map((report) => JSON.parse(formatRepositorySafetySarif(report))), null, 2);
+    const targetUri = await exportReviewContent(context, content, "sarif", "workspace-guard-repository-safety");
+    if (targetUri) {
+      await vscode.window.showInformationMessage(`Workspace Guard exported repository safety SARIF to ${targetUri.fsPath}.`);
+    }
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.copyRepositorySafetyCopilotPrompt", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder && !await ensureRepositoryCommandAllowed("homeguard.copyRepositorySafetyCopilotPrompt", workspaceFolder)) {
+      return;
+    }
+
+    const reports = await scanCurrentWorkspaceRepositorySafety();
+    await vscode.env.clipboard.writeText(formatRepositorySafetyCopilotPrompt(reports));
+    await vscode.window.showInformationMessage("Workspace Guard copied the repository safety Copilot prompt.");
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.openRepositoryPolicyFile", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      await vscode.window.showWarningMessage("Workspace Guard needs an open workspace folder to create a policy file.");
+      return;
+    }
+
+    if (!await ensureRepositoryCommandAllowed("homeguard.openRepositoryPolicyFile", workspaceFolder)) {
+      return;
+    }
+
+    const policyPath = await ensureRepositoryPolicyFile(workspaceFolder);
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(policyPath));
+    await vscode.window.showTextDocument(document, { preview: false });
+  }));
+
+  context.subscriptions.push(vscode.commands.registerCommand("homeguard.setRepositoryScanProfile", async () => {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder && !await ensureRepositoryCommandAllowed("homeguard.setRepositoryScanProfile", workspaceFolder)) {
+      return;
+    }
+
+    const currentProfile = getRepositoryScanSettings().profile;
+    const selection = await vscode.window.showQuickPick([
+      { label: "Default", profile: "default" as const, detail: "Advisory-style severity mapping for repository config findings." },
+      { label: "Restricted", profile: "restricted" as const, detail: "Stricter severity mapping for repository config findings and diagnostics." }
+    ], {
+      title: "Repository Scan Profile",
+      placeHolder: `Current profile: ${currentProfile}`
+    });
+    if (!selection) {
+      return;
+    }
+
+    await vscode.workspace.getConfiguration("homeguard").update("repositoryScan.profile", selection.profile, vscode.ConfigurationTarget.Global);
+    await vscode.window.showInformationMessage(`Workspace Guard repository scan profile is now ${selection.label}.`);
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.__captureGithubReviewTree", async () => {

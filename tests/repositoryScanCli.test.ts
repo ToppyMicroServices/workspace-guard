@@ -1,6 +1,5 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,8 +7,7 @@ import {
   runRepositoryScanCli,
   type RepositorySafetyScanResult
 } from "../src";
-
-const tempDirs: string[] = [];
+import { cleanupWorkspaceSandboxes, createWorkspaceSandbox } from "./helpers/workspaceSandbox";
 
 async function writeRepoFile(rootPath: string, relativePath: string, content: string): Promise<void> {
   const targetPath = path.join(rootPath, relativePath);
@@ -18,9 +16,7 @@ async function writeRepoFile(rootPath: string, relativePath: string, content: st
 }
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map(async (dirPath) => {
-    await rm(dirPath, { recursive: true, force: true });
-  }));
+  await cleanupWorkspaceSandboxes();
 });
 
 describe("repository scan CLI", () => {
@@ -33,8 +29,7 @@ describe("repository scan CLI", () => {
   });
 
   it("emits aggregated JSON output and exit codes", async () => {
-    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-cli-"));
-    tempDirs.push(rootPath);
+    const rootPath = await createWorkspaceSandbox("workspace-guard-cli");
     await writeRepoFile(rootPath, ".github/workflows/release.yml", `name: release
 on:
   pull_request_target:
@@ -74,8 +69,7 @@ jobs:
   });
 
   it("supports advisory runs with fail-on none", async () => {
-    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-cli-"));
-    tempDirs.push(rootPath);
+    const rootPath = await createWorkspaceSandbox("workspace-guard-cli");
     await writeRepoFile(rootPath, ".vscode/settings.json", `{
   "task.allowAutomaticTasks": "on"
 }
@@ -88,5 +82,38 @@ jobs:
     });
 
     expect(exitCode).toBe(0);
+  });
+
+  it("applies repository policy defaults and supports SARIF output", async () => {
+    const rootPath = await createWorkspaceSandbox("workspace-guard-cli");
+    await writeRepoFile(rootPath, ".workspace-guard/policy.jsonc", `{
+  "version": 1,
+  "profile": "restricted",
+  "failOn": "high",
+  "findingAllowList": ["WG-CFGSET-001"]
+}
+`);
+    await writeRepoFile(rootPath, ".vscode/settings.json", `{
+  "task.allowAutomaticTasks": "on",
+  "security.workspace.trust.enabled": false
+}
+`);
+
+    let output = "";
+    const exitCode = await runRepositoryScanCli(["--format", "sarif", rootPath], {
+      stdout: {
+        write: (chunk: string) => {
+          output += chunk;
+          return true;
+        }
+      }
+    });
+
+    const sarif = JSON.parse(output) as { runs: Array<{ results: Array<{ ruleId: string }> }> };
+    const ruleIds = sarif.runs[0]?.results.map((entry) => entry.ruleId) ?? [];
+
+    expect(exitCode).toBe(1);
+    expect(ruleIds).not.toContain("WG-CFGSET-001");
+    expect(ruleIds).toContain("WG-CFGSET-002");
   });
 });

@@ -16,10 +16,16 @@ import {
   type WorkspaceConfigScanProfile,
   type WorkspaceConfigScanResult
 } from "./workspaceConfigScanner";
+import {
+  filterFindingsWithRepositoryPolicy,
+  loadRepositoryPolicy,
+  type LoadedRepositoryPolicy,
+  type RepositorySafetyPolicy
+} from "./repositoryPolicy";
 
 export type RepositorySafetyFindingSeverity = "high" | "medium" | "info";
 export type RepositorySafetyFindingConfidence = "high" | "medium" | "low";
-export type RepositorySafetySource = "github" | "config";
+export type RepositorySafetySource = "github" | "config" | "policy";
 export type RepositorySafetyFailOn = "none" | "high" | "medium" | "info";
 
 export interface RepositorySafetyFinding {
@@ -51,10 +57,13 @@ export interface RepositorySafetyScanResult {
   summary: RepositorySafetySummary;
   github: GithubMetadataScanResult;
   config: WorkspaceConfigScanResult;
+  policy: LoadedRepositoryPolicy;
 }
 
 export interface RepositorySafetyScanOptions extends GithubMetadataScanOptions, WorkspaceConfigScanOptions {
   profile?: WorkspaceConfigScanProfile;
+  policy?: RepositorySafetyPolicy;
+  policyPath?: string;
 }
 
 const GITHUB_METADATA_FILE_PATTERNS = [
@@ -77,6 +86,27 @@ function mapConfigFinding(finding: WorkspaceConfigFinding): RepositorySafetyFind
     ...finding,
     source: "config"
   };
+}
+
+function mapPolicyIssue(policy: LoadedRepositoryPolicy): RepositorySafetyFinding[] {
+  if (!policy.filePath) {
+    return [];
+  }
+
+  const relativePath = path.relative(policy.rootPath, policy.filePath).split(path.sep).join("/");
+  return policy.validationIssues.map((issue, index) => ({
+    id: `WG-POLICY-${String(index + 1).padStart(3, "0")}`,
+    source: "policy",
+    severity: "medium",
+    category: "policy-validation",
+    file: relativePath,
+    line: issue.line,
+    reason: issue.message,
+    evidence: issue.message,
+    message: issue.message,
+    suggestedAction: "Fix the repository policy file so filtering and profile selection remain deterministic.",
+    confidence: "high"
+  }));
 }
 
 function sortFindings(findings: RepositorySafetyFinding[]): RepositorySafetyFinding[] {
@@ -149,7 +179,11 @@ export async function scanRepositorySafety(
   rootPath: string,
   options: RepositorySafetyScanOptions = {}
 ): Promise<RepositorySafetyScanResult> {
-  const profile = options.profile ?? "default";
+  const loadedPolicy = await loadRepositoryPolicy(rootPath, {
+    explicitPath: options.policyPath
+  });
+  const effectivePolicy = options.policy ?? loadedPolicy.policy;
+  const profile = options.profile ?? effectivePolicy.profile ?? "default";
   const [github, config] = await Promise.all([
     scanGithubMetadata(rootPath, {
       fs: options.fs,
@@ -162,10 +196,12 @@ export async function scanRepositorySafety(
     })
   ]);
 
-  const findings = sortFindings([
+  const rawFindings = [
     ...github.findings.map(mapGithubFinding),
-    ...config.findings.map(mapConfigFinding)
-  ]);
+    ...config.findings.map(mapConfigFinding),
+    ...mapPolicyIssue(loadedPolicy)
+  ];
+  const findings = sortFindings(filterFindingsWithRepositoryPolicy(rawFindings, effectivePolicy));
   const scannedFiles = [...new Set([...github.scannedFiles, ...config.scannedFiles])].sort();
 
   return {
@@ -175,7 +211,8 @@ export async function scanRepositorySafety(
     findings,
     summary: summarizeRepositorySafetyFindings(findings),
     github,
-    config
+    config,
+    policy: loadedPolicy
   };
 }
 

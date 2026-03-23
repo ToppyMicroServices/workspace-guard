@@ -16,12 +16,18 @@ The extension contributes these user-facing commands through the Command Palette
 - `Workspace Guard: Roll Back Privacy Hardening`
 - `Workspace Guard: Assess Workspace Safety`
 - `Workspace Guard: Review .github Automation`
+- `Workspace Guard: Review Repository Safety`
 - `Workspace Guard: Refresh .github Review`
 - `Workspace Guard: Suggest .github Remediation`
 - `Workspace Guard: Show .github Finding Details`
 - `Workspace Guard: Set .github Review Filter`
 - `Workspace Guard: Export .github Review as JSON`
 - `Workspace Guard: Export .github Review as Markdown`
+- `Workspace Guard: Export Repository Safety as JSON`
+- `Workspace Guard: Export Repository Safety as SARIF`
+- `Workspace Guard: Copy Repository Safety Copilot Prompt`
+- `Workspace Guard: Open Repository Policy File`
+- `Workspace Guard: Set Repository Scan Profile`
 
 ### Settings Input
 
@@ -41,6 +47,7 @@ Key inputs include:
 - `homeguard.privacy.*`
 - `homeguard.githubReview.checkOnStartup`
 - `homeguard.safety.*`
+- `homeguard.repositoryScan.*`
 
 ### Extension Output
 
@@ -52,6 +59,7 @@ The extension produces output through:
 - Problems entries and diagnostics for risky repository config in restricted mode
 - output panel review summaries
 - exported `.github` review reports in JSON or Markdown
+- exported repository safety reports in JSON or SARIF
 - workspace actions such as redirecting to an escape folder or removing risky folders from the workspace
 
 ## CLI
@@ -83,6 +91,7 @@ Input:
 - optional `--format text|json` to control terminal output
 - optional `--profile default|restricted` to tune local config severity in advisory vs restricted mode
 - optional `--fail-on none|high|medium|info` to control the exit threshold
+- optional `--policy <path>` to load a specific repository policy file
 - optional `--resolve-external-workflows` to fetch referenced reusable workflows for deeper inspection
 
 Behavior:
@@ -95,7 +104,25 @@ Output:
 
 - terminal review output with findings grouped by severity
 - JSON output for automation or CI consumption when `--format json` is used
+- SARIF 2.1.0 output for GitHub Code Scanning when `--format sarif` is used
 - JSON or Markdown content when exported through the extension workflow
+
+## Repository Policy Interface
+
+Workspace Guard auto-discovers repository policy files from these paths, in order:
+
+- `.workspace-guard/policy.jsonc`
+- `.workspace-guard/policy.json`
+- `workspace-guard.policy.jsonc`
+- `workspace-guard.policy.json`
+
+Policy fields currently include:
+
+- `version`
+- `profile`
+- `failOn`
+- `findingAllowList`
+- `commandAllowList`
 
 ## Repository Interface
 

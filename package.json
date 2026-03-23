@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "description": "Warn before VS Code opens your home directory or other high-risk folders, and offer privacy hardening for telemetry-related settings.",
   "icon": "assets/workspace-guard-icon.png",
-  "main": "./dist/src/vscodeExtension.js",
+  "main": "./dist/extension.js",
   "engines": {
     "vscode": "^1.110.0"
   },
@@ -42,11 +42,17 @@
     "onCommand:homeguard.rollbackPrivacyHardening",
     "onCommand:homeguard.assessWorkspaceSafety",
     "onCommand:homeguard.reviewGithubAutomation",
+    "onCommand:homeguard.reviewRepositorySafety",
     "onCommand:homeguard.refreshGithubAutomationReview",
     "onCommand:homeguard.suggestGithubRemediation",
     "onCommand:homeguard.setGithubReviewSeverityFilter",
     "onCommand:homeguard.exportGithubReviewJson",
-    "onCommand:homeguard.exportGithubReviewMarkdown"
+    "onCommand:homeguard.exportGithubReviewMarkdown",
+    "onCommand:homeguard.exportRepositorySafetyJson",
+    "onCommand:homeguard.exportRepositorySafetySarif",
+    "onCommand:homeguard.copyRepositorySafetyCopilotPrompt",
+    "onCommand:homeguard.openRepositoryPolicyFile",
+    "onCommand:homeguard.setRepositoryScanProfile"
   ],
   "contributes": {
     "commands": [
@@ -91,6 +97,11 @@
         "category": "Workspace Guard"
       },
       {
+        "command": "homeguard.reviewRepositorySafety",
+        "title": "Review Repository Safety",
+        "category": "Workspace Guard"
+      },
+      {
         "command": "homeguard.refreshGithubAutomationReview",
         "title": "Refresh .github Review",
         "category": "Workspace Guard"
@@ -118,6 +129,31 @@
       {
         "command": "homeguard.exportGithubReviewMarkdown",
         "title": "Export .github Review as Markdown",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.exportRepositorySafetyJson",
+        "title": "Export Repository Safety as JSON",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.exportRepositorySafetySarif",
+        "title": "Export Repository Safety as SARIF",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.copyRepositorySafetyCopilotPrompt",
+        "title": "Copy Repository Safety Copilot Prompt",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.openRepositoryPolicyFile",
+        "title": "Open Repository Policy File",
+        "category": "Workspace Guard"
+      },
+      {
+        "command": "homeguard.setRepositoryScanProfile",
+        "title": "Set Repository Scan Profile",
         "category": "Workspace Guard"
       }
     ],
@@ -298,6 +334,31 @@
           "type": "boolean",
           "default": true,
           "description": "Block publish actions in high-risk workspaces."
+        },
+        "homeguard.repositoryScan.profile": {
+          "type": "string",
+          "enum": [
+            "default",
+            "restricted"
+          ],
+          "default": "restricted",
+          "description": "Default repository safety scan profile for CLI-style review and extension diagnostics."
+        },
+        "homeguard.repositoryScan.failOn": {
+          "type": "string",
+          "enum": [
+            "none",
+            "high",
+            "medium",
+            "info"
+          ],
+          "default": "medium",
+          "description": "Default exit threshold or policy threshold used for repository safety scans."
+        },
+        "homeguard.repositoryScan.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Publish repository safety findings as Problems diagnostics."
         }
       }
     }
@@ -307,13 +368,15 @@
     "workspace-guard-scan": "dist/src/githubScanCli.js"
   },
   "files": [
-    "dist/src/**",
+    "dist/extension.js",
     "LICENSE",
     "README.md",
     "assets/workspace-guard-icon.png"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:ts && npm run bundle:extension",
+    "build:ts": "tsc -p tsconfig.json",
+    "bundle:extension": "node scripts/bundle-extension.mjs",
     "test": "vitest run",
     "test:smoke": "node dist/tests/smoke/runTest.js",
     "vscode:prepublish": "npm run build",
@@ -334,6 +397,7 @@
     "@types/vscode": "^1.110.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.25.10",
     "fast-check": "^4.3.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
