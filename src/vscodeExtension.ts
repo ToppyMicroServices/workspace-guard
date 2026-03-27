@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import * as vscode from "vscode";
@@ -35,9 +35,17 @@ import {
   formatGithubFindingRemediationMarkdown,
   getGithubFindingRemediationSnippet
 } from "./extension/githubRemediation";
+import {
+  collectEphemeralWorkspaceCleanupTargets,
+  getRecentWorkspaceSuggestions,
+  updateRecentWorkspaceHistory
+} from "./extension/workspaceSession";
 
 const LAST_BACKUP_PATH_KEY = "homeguard.lastTelemetryBackupPath";
 const GITHUB_REVIEW_FILTER_KEY = "homeguard.githubReviewSeverityFilter";
+const RECENT_WORKSPACES_KEY = "homeguard.recentWorkspaces";
+const RECENT_WORKSPACES_LAST_SHOWN_AT_KEY = "homeguard.recentWorkspacesLastShownAt";
+const RECENT_WORKSPACES_PROMPT_COOLDOWN_MS = 60_000;
 
 type GithubReviewTreeNode =
   | { kind: "summary"; summary: GithubMetadataReviewSummary; filteredSummary: GithubMetadataReviewSummary; filter: GithubReviewSeverityFilter }
@@ -270,6 +278,65 @@ function getWorkspaceFolders(): WorkspaceFolderLike[] {
       fsPath: folder.uri.fsPath
     },
     name: folder.name
+  }));
+}
+
+function getCurrentWorkspacePaths(): string[] {
+  return (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+}
+
+async function updateStoredRecentWorkspaces(context: vscode.ExtensionContext): Promise<string[]> {
+  const previousHistory = context.globalState.get<string[]>(RECENT_WORKSPACES_KEY, []);
+  const nextHistory = updateRecentWorkspaceHistory(previousHistory, getCurrentWorkspacePaths());
+  if (JSON.stringify(previousHistory) !== JSON.stringify(nextHistory)) {
+    await context.globalState.update(RECENT_WORKSPACES_KEY, nextHistory);
+  }
+
+  return nextHistory;
+}
+
+async function maybeShowRecentWorkspaces(context: vscode.ExtensionContext): Promise<void> {
+  const currentWorkspacePaths = getCurrentWorkspacePaths();
+  if (currentWorkspacePaths.length === 0) {
+    return;
+  }
+
+  const lastShownAt = context.globalState.get<number>(RECENT_WORKSPACES_LAST_SHOWN_AT_KEY);
+  const now = Date.now();
+  if (lastShownAt && now - lastShownAt < RECENT_WORKSPACES_PROMPT_COOLDOWN_MS) {
+    return;
+  }
+
+  const history = await updateStoredRecentWorkspaces(context);
+  const recentSuggestions = getRecentWorkspaceSuggestions(history, currentWorkspacePaths);
+  if (recentSuggestions.length === 0) {
+    return;
+  }
+
+  await context.globalState.update(RECENT_WORKSPACES_LAST_SHOWN_AT_KEY, now);
+  const selection = await vscode.window.showQuickPick(
+    recentSuggestions.map((targetPath) => ({
+      label: path.basename(targetPath) || targetPath,
+      description: targetPath,
+      targetPath
+    })),
+    {
+      title: "Recent Workspaces",
+      placeHolder: "Open a workspace you used recently"
+    }
+  );
+
+  if (!selection) {
+    return;
+  }
+
+  await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(selection.targetPath), false);
+}
+
+async function cleanupEphemeralWorkspaceFolders(removedWorkspacePaths: readonly string[]): Promise<void> {
+  const cleanupTargets = collectEphemeralWorkspaceCleanupTargets(removedWorkspacePaths, getCurrentWorkspacePaths());
+  await Promise.all(cleanupTargets.map(async (targetPath) => {
+    await rm(targetPath, { recursive: true, force: true });
   }));
 }
 
@@ -631,6 +698,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
+  await updateStoredRecentWorkspaces(context);
+  await maybeShowRecentWorkspaces(context);
   await refreshGithubReviewTree(activation.githubMetadataReports);
 
   context.subscriptions.push(vscode.commands.registerCommand("homeguard.openEscapeFolder", async () => {
@@ -874,7 +943,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await vscode.window.showTextDocument(document, { preview: false });
   }));
 
-  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
+    await cleanupEphemeralWorkspaceFolders(event.removed.map((folder) => folder.uri.fsPath));
+    await updateStoredRecentWorkspaces(context);
     await refreshGithubReviewTree();
   }));
 
