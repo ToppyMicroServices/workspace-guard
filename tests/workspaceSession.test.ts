@@ -1,3 +1,4 @@
+import path from "node:path";
 import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "vitest";
@@ -16,9 +17,9 @@ describe("workspaceSession", () => {
     );
 
     expect(history).toEqual([
-      "/Users/akira/work/project-c",
-      "/Users/akira/work/project-a",
-      "/Users/akira/work/project-b"
+      path.normalize("/Users/akira/work/project-c"),
+      path.normalize("/Users/akira/work/project-a"),
+      path.normalize("/Users/akira/work/project-b")
     ]);
   });
 
@@ -33,13 +34,13 @@ describe("workspaceSession", () => {
     );
 
     expect(suggestions).toEqual([
-      "/Users/akira/work/project-a",
-      "/Users/akira/work/project-b"
+      path.normalize("/Users/akira/work/project-a"),
+      path.normalize("/Users/akira/work/project-b")
     ]);
   });
 
   it("cleans up removed ephemeral escape folders once a real workspace is selected", () => {
-    const ephemeralPath = `${tmpdir()}/vscode-home-escape-2026-03-27T01-02-03-000Z`;
+    const ephemeralPath = path.join(tmpdir(), "vscode-home-escape-2026-03-27T01-02-03-000Z");
     const cleanupTargets = collectEphemeralWorkspaceCleanupTargets(
       [
         ephemeralPath
@@ -55,7 +56,7 @@ describe("workspaceSession", () => {
   });
 
   it("keeps the ephemeral escape folder when no real workspace replaced it", () => {
-    const ephemeralPath = `${tmpdir()}/vscode-home-escape-2026-03-27T01-02-03-000Z`;
+    const ephemeralPath = path.join(tmpdir(), "vscode-home-escape-2026-03-27T01-02-03-000Z");
     const cleanupTargets = collectEphemeralWorkspaceCleanupTargets(
       [
         ephemeralPath
