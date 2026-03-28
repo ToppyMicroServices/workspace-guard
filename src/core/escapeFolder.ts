@@ -37,6 +37,8 @@ const defaultFs: EscapeFolderFs = {
   }
 };
 
+export const EPHEMERAL_ESCAPE_FOLDER_PREFIX = "vscode-home-escape-";
+
 function sanitizeEphemeralSuffix(value: string): string {
   const collapsed = value
     .replace(/[:.]/g, "-")
@@ -48,7 +50,11 @@ function sanitizeEphemeralSuffix(value: string): string {
 }
 
 function buildEphemeralFolderName(timestamp?: string): string {
-  return `vscode-home-escape-${sanitizeEphemeralSuffix(timestamp ?? new Date().toISOString())}`;
+  return `${EPHEMERAL_ESCAPE_FOLDER_PREFIX}${sanitizeEphemeralSuffix(timestamp ?? new Date().toISOString())}`;
+}
+
+export function isEphemeralEscapeFolderPath(targetPath: string): boolean {
+  return path.dirname(targetPath) === tmpdir() && path.basename(targetPath).startsWith(EPHEMERAL_ESCAPE_FOLDER_PREFIX);
 }
 
 export function resolveEscapeFolderPath(options: EscapeFolderOptions): string {
