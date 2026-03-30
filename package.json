@@ -362,7 +362,7 @@
     "@vscode/vsce": "^3.7.1",
     "fast-check": "^4.3.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.2"
   },
   "overrides": {
     "undici": "^7.24.0",
