@@ -680,6 +680,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showCollapseAll: true
   });
   context.subscriptions.push(githubReviewTreeView);
+  const interactiveWarningsEnabled = context.extensionMode !== vscode.ExtensionMode.Test;
 
   const refreshGithubReviewTree = async (reports?: GithubMetadataScanResult[]): Promise<GithubMetadataScanResult[]> => {
     const nextReports = reports ?? await createHomeguardCommandHandlers(host, getHomeguardSettings()).reviewGithubMetadata();
@@ -696,7 +697,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(formatTelemetrySummary(activation.telemetryReport.actionableChanges.length));
   }
 
-  if (activation.githubMetadataSummary && activation.githubMetadataReports) {
+  if (interactiveWarningsEnabled && activation.githubMetadataSummary && activation.githubMetadataReports) {
     const selection = await vscode.window.showWarningMessage(
       `${formatGithubMetadataSummary(activation.githubMetadataSummary)} Review this repository before granting trust or enabling extra extensions.`,
       "Open Review"
@@ -713,7 +714,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     host.installedExtensions,
     resolvedSettings.githubReview.allowedExtensionIds
   );
-  if (extensionPolicyFindings.length > 0) {
+  if (interactiveWarningsEnabled && extensionPolicyFindings.length > 0) {
     const firstFinding = extensionPolicyFindings[0];
     await vscode.window.showWarningMessage(
       `${firstFinding.message} Keep untrusted LaTeX workspaces in Restricted Mode until approved extensions are in place.`
@@ -721,7 +722,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   if (
-    resolvedSettings.githubReview.warnOnTrustedWorkspace
+    interactiveWarningsEnabled
+    && resolvedSettings.githubReview.warnOnTrustedWorkspace
     && vscode.workspace.isTrusted
     && (activation.githubMetadataSummary?.totalFindings ?? 0) > 0
   ) {
