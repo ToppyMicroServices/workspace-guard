@@ -23,7 +23,7 @@ npx homeguard-code ~
 npx workspace-guard-scan .
 ```
 
-Use `homeguard-code` if you want the `code` command to check risky paths before opening VS Code. Use `workspace-guard-scan` if you want a quick safety review of a repository's `.github`, `.vscode`, extension recommendation, and LaTeX trust surfaces before you trust it.
+Use `homeguard-code` if you want the `code` command to check risky paths before opening VS Code. Use `workspace-guard-scan` if you want a quick safety review of a repository's `.github`, `.vscode`, multi-root `.code-workspace`, `.devcontainer`, extension recommendation, AI/MCP, and LaTeX trust surfaces before you trust it.
 
 If you want the scanner to inspect external reusable workflows as well, add `--resolve-external-workflows`. That mode is opt-in because it fetches the referenced workflow files.
 

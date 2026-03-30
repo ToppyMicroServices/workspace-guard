@@ -148,6 +148,18 @@ function createExtensionAllowlistRemediation(finding: GithubMetadataFinding): Gi
   };
 }
 
+function createRemoteProfileRemediation(finding: GithubMetadataFinding): GithubFindingRemediation {
+  return {
+    title: "Separate remote, devcontainer, AI, and sync trust profiles",
+    summary: finding.suggestedAction,
+    steps: [
+      "Treat Dev Container, Remote SSH/WSL, AI, MCP, and Settings Sync settings as execution or propagation surfaces.",
+      "Keep remote/container work in a separate VS Code profile from local editing when possible.",
+      "Avoid syncing risky settings, MCP servers, and unapproved extensions across machines without explicit review."
+    ]
+  };
+}
+
 function createDefaultRemediation(finding: GithubMetadataFinding): GithubFindingRemediation {
   return {
     title: "Review and remediate this finding",
@@ -198,6 +210,12 @@ export function buildGithubFindingRemediation(finding: GithubMetadataFinding): G
     case "WG-WS-005":
     case "WG-WS-006":
       return createExtensionAllowlistRemediation(finding);
+    case "WG-WS-008":
+    case "WG-WS-009":
+    case "WG-WS-010":
+    case "WG-WS-011":
+    case "WG-WS-012":
+      return createRemoteProfileRemediation(finding);
     default:
       return createDefaultRemediation(finding);
   }

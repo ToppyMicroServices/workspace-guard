@@ -102,8 +102,11 @@ const VSCODE_SETTINGS_FILE_PATTERN = /^\.vscode\/settings\.json$/i;
 const VSCODE_TASKS_FILE_PATTERN = /^\.vscode\/tasks\.json$/i;
 const VSCODE_LAUNCH_FILE_PATTERN = /^\.vscode\/launch\.json$/i;
 const VSCODE_EXTENSIONS_FILE_PATTERN = /^\.vscode\/extensions\.json$/i;
+const VSCODE_MCP_FILE_PATTERN = /^\.vscode\/mcp\.json$/i;
 const CODE_WORKSPACE_FILE_PATTERN = /(^|\/)[^/]+\.code-workspace$/i;
-const LATEX_INPUT_FILE_PATTERN = /\.(tex|bib|cls|sty)$/i;
+const DEVCONTAINER_FILE_PATTERN = /^\.devcontainer\/.+/i;
+const LATEX_INPUT_FILE_PATTERN = /\.(tex|bib|bst|cls|sty)$/i;
+const LATEX_AUXILIARY_POLICY_FILE_PATTERN = /(^|\/)(latexmkrc|\.latexmkrc)$/i;
 const CODEQL_ACTION_PATTERN = /^github\/codeql-action\/analyze@/i;
 const EXTERNAL_REUSABLE_WORKFLOW_PATTERN = /^[^./][^@]+\/\.github\/workflows\/[^@]+@/i;
 const IGNORED_WORKSPACE_DIRS = new Set([".git", ".beads", "node_modules", "dist", "out", "build", ".next", ".venv", "vendor"]);
@@ -145,7 +148,15 @@ const TEMPLATE_COMMAND_PATTERN = /\b(curl|wget)\b.+\|\s*(bash|sh)\b|\bsudo\b|\bc
 const DIRECT_USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs)/i;
 const EXECUTION_SINK_KEYS = new Set(["script", "command", "args", "entrypoint", "ref", "repository"]);
 const RISKY_EXTENSION_PATTERN = /(shell|command|task|terminal|runner|code[- ]runner|script|executor|automation)/i;
-const RISKY_SETTINGS_KEY_PATTERN = /^(code-runner\.|command-runner\.|task\.allowAutomaticTasks$|terminal\.integrated\.(shell|profiles|defaultProfile)|latex-workshop\.latex\.(tools|recipes|autoBuild))/i;
+const RISKY_SETTINGS_KEY_PATTERN = /^(code-runner\.|command-runner\.|task\.allowAutomaticTasks$|terminal\.integrated\.(shell|profiles|defaultProfile)|latex-workshop\.latex\.(tools|recipes|autoBuild|clean|outDir|auxDir|rootFile|viewer)|remote\.(SSH|WSL|containers)\.|dev\.containers\.|mcp\.|agent\.|chat\.mcp\.|github\.copilot\.chat\.|settingsSync\.)/i;
+const DEVCONTAINER_COMMAND_KEYS = new Set([
+  "initializeCommand",
+  "onCreateCommand",
+  "updateContentCommand",
+  "postCreateCommand",
+  "postStartCommand",
+  "postAttachCommand"
+]);
 
 function toRelativePath(rootPath: string, filePath: string): string {
   return path.relative(rootPath, filePath).split(path.sep).join("/");
@@ -1335,6 +1346,39 @@ function scanWorkspaceSettingsLikeFile(file: string, content: string): GithubMet
   return findings;
 }
 
+function scanCodeWorkspaceFile(
+  file: string,
+  content: string,
+  options: Pick<GithubMetadataScanOptions, "allowedExtensionIds" | "recommendedLatexExtensionIds">,
+  latexFiles: string[]
+): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+  const findings: GithubMetadataFinding[] = [];
+
+  if (!data) {
+    return findings;
+  }
+
+  const folders = asArray(data.folders);
+  if (folders.length > 1) {
+    findings.push(createFinding(file, findLineNumber(lines, /"folders"\s*:/), {
+      id: "WG-WS-008",
+      severity: "medium",
+      category: "workspace-boundary",
+      reason: "multi-root workspace expands the trust boundary across multiple folders",
+      evidence: `"folders": ${folders.length}`,
+      message: "Multi-root workspaces should be reviewed more strictly because one root can influence the trust surface of the full workspace.",
+      suggestedAction: "Open .code-workspace files as text first, confirm every root, and avoid granting trust until the combined workspace configuration is reviewed.",
+      confidence: "high"
+    }));
+  }
+
+  findings.push(...scanWorkspaceSettingsLikeFile(file, content));
+  findings.push(...scanExtensionsFile(file, content, options, latexFiles));
+  return findings;
+}
+
 function scanTasksFile(file: string, content: string): GithubMetadataFinding[] {
   const lines = toLines(content);
   const data = parseJsonObject(content);
@@ -1419,6 +1463,95 @@ function scanLaunchFile(file: string, content: string): GithubMetadataFinding[] 
   return findings;
 }
 
+function scanDevcontainerFile(file: string, content: string): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const findings: GithubMetadataFinding[] = [];
+  const document = parseDocument(content, {
+    prettyErrors: false,
+    strict: false
+  });
+  const data = document.toJS({ maxAliasCount: 50 }) as unknown;
+
+  if (!isObject(data)) {
+    return findings;
+  }
+
+  for (const key of DEVCONTAINER_COMMAND_KEYS) {
+    const value = asString(data[key]);
+    if (!value) {
+      continue;
+    }
+
+    findings.push(createFinding(file, findLineNumber(lines, new RegExp(`^\\s*"?(?:${key})"?\\s*:`)), {
+      id: "WG-WS-009",
+      severity: "high",
+      category: "devcontainer-execution",
+      reason: `devcontainer configuration defines ${key}`,
+      evidence: `${key}: ${value}`,
+      message: "Dev Container configuration runs commands during container lifecycle and should be reviewed before trust is granted.",
+      suggestedAction: "Review devcontainer lifecycle commands, avoid automatic post-create execution for untrusted repositories, and use a separate remote/container trust profile when possible.",
+      confidence: "high"
+    }));
+  }
+
+  const customizations = isObject(data.customizations) ? data.customizations : undefined;
+  const vscodeCustomizations = customizations && isObject(customizations.vscode)
+    ? customizations.vscode
+    : undefined;
+  const extensions = vscodeCustomizations
+    ? asArray(vscodeCustomizations.extensions).map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry))
+    : [];
+
+  for (const extensionId of extensions) {
+    findings.push(createFinding(file, findLineNumber(lines, extensionId), {
+      id: "WG-WS-010",
+      severity: "medium",
+      category: "devcontainer-extensions",
+      reason: "devcontainer customizations request VS Code extensions inside the remote environment",
+      evidence: extensionId,
+      message: "Dev Container customizations can install or enable extensions in the remote environment and should be reviewed like workspace recommendations.",
+      suggestedAction: "Keep devcontainer extension customizations on the approved allowlist and review them before opening untrusted repositories remotely.",
+      confidence: "medium"
+    }));
+  }
+
+  return findings;
+}
+
+function scanMcpConfigFile(file: string, content: string): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+  const findings: GithubMetadataFinding[] = [];
+
+  if (!data) {
+    return findings;
+  }
+
+  const servers = isObject(data.servers) ? data.servers : undefined;
+  if (!servers) {
+    return findings;
+  }
+
+  for (const [serverName, serverConfig] of Object.entries(servers)) {
+    if (!isObject(serverConfig)) {
+      continue;
+    }
+
+    findings.push(createFinding(file, findLineNumber(lines, serverName), {
+      id: "WG-WS-011",
+      severity: "medium",
+      category: "ai-mcp",
+      reason: "workspace includes MCP server configuration",
+      evidence: serverName,
+      message: "MCP server settings can connect tools and external capabilities into the editor and should be reviewed before trust is granted.",
+      suggestedAction: "Review MCP server definitions carefully, keep them out of Settings Sync unless explicitly approved, and isolate AI/tooling profiles from general editing profiles.",
+      confidence: "high"
+    }));
+  }
+
+  return findings;
+}
+
 function scanExtensionsFile(
   file: string,
   content: string,
@@ -1491,6 +1624,19 @@ function scanLatexWorkspaceInputs(file: string): GithubMetadataFinding[] {
   })];
 }
 
+function scanLatexPolicyFiles(file: string): GithubMetadataFinding[] {
+  return [createFinding(file, undefined, {
+    id: "WG-WS-012",
+    severity: "medium",
+    category: "latex-build-policy",
+    reason: "LaTeX build policy file can change external tool execution and clean behavior",
+    evidence: file,
+    message: "LaTeX build helper files such as latexmkrc should be reviewed because they can alter commands, output paths, viewers, and cleanup behavior.",
+    suggestedAction: "Review latexmkrc and related build policy files alongside workspace settings before trusting the repository.",
+    confidence: "high"
+  })];
+}
+
 export async function scanGithubMetadata(
   rootPath: string,
   options: GithubMetadataScanOptions = {}
@@ -1507,11 +1653,16 @@ export async function scanGithubMetadata(
       || VSCODE_TASKS_FILE_PATTERN.test(relativeFilePath)
       || VSCODE_LAUNCH_FILE_PATTERN.test(relativeFilePath)
       || VSCODE_EXTENSIONS_FILE_PATTERN.test(relativeFilePath)
+      || VSCODE_MCP_FILE_PATTERN.test(relativeFilePath)
+      || DEVCONTAINER_FILE_PATTERN.test(relativeFilePath)
       || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath);
   });
   const latexFiles = workspaceFiles
     .map((filePath) => toRelativePath(rootPath, filePath))
     .filter((relativeFilePath) => LATEX_INPUT_FILE_PATTERN.test(relativeFilePath));
+  const latexPolicyFiles = workspaceFiles
+    .map((filePath) => toRelativePath(rootPath, filePath))
+    .filter((relativeFilePath) => LATEX_AUXILIARY_POLICY_FILE_PATTERN.test(relativeFilePath));
   const findings: GithubMetadataFinding[] = [];
   const workflowContents = new Map<string, string>();
   const resolutionContext: WorkflowResolutionContext = {
@@ -1561,7 +1712,7 @@ export async function scanGithubMetadata(
     const relativeFilePath = toRelativePath(rootPath, filePath);
     const content = await fileSystem.readFile(filePath, "utf8");
 
-    if (VSCODE_SETTINGS_FILE_PATTERN.test(relativeFilePath) || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath)) {
+    if (VSCODE_SETTINGS_FILE_PATTERN.test(relativeFilePath)) {
       findings.push(...scanWorkspaceSettingsLikeFile(relativeFilePath, content));
     }
 
@@ -1575,13 +1726,31 @@ export async function scanGithubMetadata(
       continue;
     }
 
-    if (VSCODE_EXTENSIONS_FILE_PATTERN.test(relativeFilePath) || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath)) {
+    if (VSCODE_EXTENSIONS_FILE_PATTERN.test(relativeFilePath)) {
       findings.push(...scanExtensionsFile(relativeFilePath, content, options, latexFiles));
+      continue;
+    }
+
+    if (VSCODE_MCP_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanMcpConfigFile(relativeFilePath, content));
+      continue;
+    }
+
+    if (DEVCONTAINER_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanDevcontainerFile(relativeFilePath, content));
+      continue;
+    }
+
+    if (CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanCodeWorkspaceFile(relativeFilePath, content, options, latexFiles));
     }
   }
 
   if (latexFiles.length > 0) {
     findings.push(...scanLatexWorkspaceInputs(latexFiles[0]));
+  }
+  for (const latexPolicyFile of latexPolicyFiles) {
+    findings.push(...scanLatexPolicyFiles(latexPolicyFile));
   }
 
   findings.sort((left, right) => {
@@ -1596,6 +1765,7 @@ export async function scanGithubMetadata(
     ...githubFiles.map((filePath) => toRelativePath(rootPath, filePath)),
     ...workspaceReviewFiles.map((filePath) => toRelativePath(rootPath, filePath)),
     ...(latexFiles.length > 0 ? [latexFiles[0]] : []),
+    ...latexPolicyFiles,
     ...resolutionContext.resolvedExternalFiles
   ].sort();
 

