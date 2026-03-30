@@ -52,6 +52,8 @@ export interface GithubMetadataScanOptions {
   fs?: GithubMetadataScannerFs;
   resolveExternalWorkflows?: boolean;
   externalWorkflowResolver?: GithubMetadataExternalWorkflowResolver;
+  allowedExtensionIds?: string[];
+  recommendedLatexExtensionIds?: string[];
 }
 
 type YamlObject = Record<string, unknown>;
@@ -96,8 +98,17 @@ const DEPENDABOT_FILE_PATTERN = /^\.github\/dependabot\.ya?ml$/i;
 const CODEOWNERS_FILE_PATTERN = /^\.github\/CODEOWNERS$/;
 const ISSUE_TEMPLATE_FILE_PATTERN = /^\.github\/ISSUE_TEMPLATE\/.+/;
 const PR_TEMPLATE_FILE_PATTERN = /^\.github\/PULL_REQUEST_TEMPLATE(?:\/.+|[^/]*)$/;
+const VSCODE_SETTINGS_FILE_PATTERN = /^\.vscode\/settings\.json$/i;
+const VSCODE_TASKS_FILE_PATTERN = /^\.vscode\/tasks\.json$/i;
+const VSCODE_LAUNCH_FILE_PATTERN = /^\.vscode\/launch\.json$/i;
+const VSCODE_EXTENSIONS_FILE_PATTERN = /^\.vscode\/extensions\.json$/i;
+const CODE_WORKSPACE_FILE_PATTERN = /(^|\/)[^/]+\.code-workspace$/i;
+const LATEX_INPUT_FILE_PATTERN = /\.(tex|bib|cls|sty)$/i;
 const CODEQL_ACTION_PATTERN = /^github\/codeql-action\/analyze@/i;
 const EXTERNAL_REUSABLE_WORKFLOW_PATTERN = /^[^./][^@]+\/\.github\/workflows\/[^@]+@/i;
+const IGNORED_WORKSPACE_DIRS = new Set([".git", ".beads", "node_modules", "dist", "out", "build", ".next", ".venv", "vendor"]);
+const DEFAULT_ALLOWED_EXTENSION_IDS = ["ToppyMicroServices.workspace-guard", "LaTeX-Secure-Workspace"];
+const DEFAULT_RECOMMENDED_LATEX_EXTENSION_IDS = ["LaTeX-Secure-Workspace"];
 const RISKY_WRITE_PERMISSION_SEVERITY: Record<string, GithubMetadataFindingSeverity> = {
   "actions": "high",
   "attestations": "medium",
@@ -133,6 +144,8 @@ const TEMPLATE_SECRET_REQUEST_PATTERN = /\b(paste|attach|share|send|provide|incl
 const TEMPLATE_COMMAND_PATTERN = /\b(curl|wget)\b.+\|\s*(bash|sh)\b|\bsudo\b|\bchmod\s+\+x\b/i;
 const DIRECT_USER_CONTROLLED_EXPRESSION_PATTERN = /\${{\s*(github\.event\.(pull_request|issue|comment|discussion|review|head_commit)|github\.head_ref|github\.event\.inputs)/i;
 const EXECUTION_SINK_KEYS = new Set(["script", "command", "args", "entrypoint", "ref", "repository"]);
+const RISKY_EXTENSION_PATTERN = /(shell|command|task|terminal|runner|code[- ]runner|script|executor|automation)/i;
+const RISKY_SETTINGS_KEY_PATTERN = /^(code-runner\.|command-runner\.|task\.allowAutomaticTasks$|terminal\.integrated\.(shell|profiles|defaultProfile)|latex-workshop\.latex\.(tools|recipes|autoBuild))/i;
 
 function toRelativePath(rootPath: string, filePath: string): string {
   return path.relative(rootPath, filePath).split(path.sep).join("/");
@@ -194,6 +207,9 @@ async function walkDirectory(
   const nestedFiles = await Promise.all(entries.map(async (entry) => {
     const childPath = path.join(targetPath, entry.name);
     if (entry.isDirectory()) {
+      if (IGNORED_WORKSPACE_DIRS.has(entry.name)) {
+        return [];
+      }
       return await walkDirectory(fileSystem, childPath);
     }
 
@@ -1260,12 +1276,242 @@ function scanTemplateFile(file: string, content: string): GithubMetadataFinding[
   return findings;
 }
 
+function parseJsonObject(content: string): YamlObject | undefined {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    return isObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeExtensionIdList(ids: string[] | undefined, defaults: string[]): string[] {
+  const source = ids && ids.length > 0 ? ids : defaults;
+  return source.map((entry) => entry.trim()).filter(Boolean);
+}
+
+function collectWorkspaceExtensionRecommendations(data: YamlObject): string[] {
+  const extensions = isObject(data.extensions) ? data.extensions : undefined;
+  const recommendations = extensions?.recommendations ?? data.recommendations;
+  return asArray(recommendations)
+    .map((entry) => asString(entry)?.trim())
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function scanWorkspaceSettingsLikeFile(file: string, content: string): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+
+  if (!data) {
+    return [];
+  }
+
+  const findings: GithubMetadataFinding[] = [];
+  const settings = file.endsWith(".code-workspace") && isObject(data.settings)
+    ? data.settings
+    : data;
+
+  if (!isObject(settings)) {
+    return findings;
+  }
+
+  for (const [key, value] of Object.entries(settings)) {
+    if (!RISKY_SETTINGS_KEY_PATTERN.test(key)) {
+      continue;
+    }
+
+    findings.push(createFinding(file, findLineNumber(lines, new RegExp(`"${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)), {
+      id: "WG-WS-001",
+      severity: "medium",
+      category: "workspace-settings",
+      reason: `workspace settings configure command execution or automatic tooling through ${key}`,
+      evidence: `"${key}": ${JSON.stringify(value)}`,
+      message: "Workspace settings configure an execution-related feature that should be reviewed before trusting the repository.",
+      suggestedAction: "Review execution-related workspace settings and keep automatic command execution disabled unless it is explicitly approved.",
+      confidence: "medium"
+    }));
+  }
+
+  return findings;
+}
+
+function scanTasksFile(file: string, content: string): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+  const findings: GithubMetadataFinding[] = [];
+
+  if (!data) {
+    return findings;
+  }
+
+  for (const task of asArray(data.tasks)) {
+    if (!isObject(task)) {
+      continue;
+    }
+
+    const command = asString(task.command);
+    const type = asString(task.type);
+    const runOn = isObject(task.runOptions) ? asString(task.runOptions.runOn) : undefined;
+
+    if (type === "shell" || command) {
+      findings.push(createFinding(file, findLineNumber(lines, command ?? /"type"\s*:\s*"shell"/), {
+        id: "WG-WS-002",
+        severity: "high",
+        category: "workspace-tasks",
+        reason: "workspace task executes shell or external commands",
+        evidence: command ?? `type: ${type ?? "shell"}`,
+        message: "Workspace tasks can run external commands and should be treated like executable code during review.",
+        suggestedAction: "Require explicit review for shared tasks.json files and avoid shell tasks in untrusted workspaces.",
+        confidence: "high"
+      }));
+    }
+
+    if (runOn === "folderOpen") {
+      findings.push(createFinding(file, findLineNumber(lines, /"runOn"\s*:\s*"folderOpen"/), {
+        id: "WG-WS-003",
+        severity: "high",
+        category: "workspace-tasks",
+        reason: "workspace task is configured to run when the folder opens",
+        evidence: "runOn: folderOpen",
+        message: "Workspace tasks are configured for automatic execution when the folder opens.",
+        suggestedAction: "Disable folderOpen task automation and require manual invocation after review.",
+        confidence: "high"
+      }));
+    }
+  }
+
+  return findings;
+}
+
+function scanLaunchFile(file: string, content: string): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+  const findings: GithubMetadataFinding[] = [];
+
+  if (!data) {
+    return findings;
+  }
+
+  for (const config of asArray(data.configurations)) {
+    if (!isObject(config)) {
+      continue;
+    }
+
+    for (const key of ["preLaunchTask", "postDebugTask"]) {
+      const value = asString(config[key]);
+      if (!value) {
+        continue;
+      }
+
+      findings.push(createFinding(file, findLineNumber(lines, new RegExp(`"${key}"\\s*:`)), {
+        id: "WG-WS-004",
+        severity: "medium",
+        category: "workspace-debug",
+        reason: `launch configuration triggers ${key}`,
+        evidence: `${key}: ${value}`,
+        message: "Launch configurations can chain task execution and should be reviewed like code before trust is granted.",
+        suggestedAction: "Review launch.json for task chaining and avoid automatic task execution in untrusted workspaces.",
+        confidence: "high"
+      }));
+    }
+  }
+
+  return findings;
+}
+
+function scanExtensionsFile(
+  file: string,
+  content: string,
+  options: Pick<GithubMetadataScanOptions, "allowedExtensionIds" | "recommendedLatexExtensionIds">,
+  latexFiles: string[]
+): GithubMetadataFinding[] {
+  const lines = toLines(content);
+  const data = parseJsonObject(content);
+  const findings: GithubMetadataFinding[] = [];
+
+  if (!data) {
+    return findings;
+  }
+
+  const recommendations = collectWorkspaceExtensionRecommendations(data);
+  const allowedExtensionIds = new Set(normalizeExtensionIdList(options.allowedExtensionIds, DEFAULT_ALLOWED_EXTENSION_IDS));
+  const recommendedLatexExtensions = normalizeExtensionIdList(
+    options.recommendedLatexExtensionIds,
+    DEFAULT_RECOMMENDED_LATEX_EXTENSION_IDS
+  );
+
+  for (const extensionId of recommendations) {
+    if (allowedExtensionIds.has(extensionId)) {
+      continue;
+    }
+
+    findings.push(createFinding(file, findLineNumber(lines, extensionId), {
+      id: "WG-WS-005",
+      severity: RISKY_EXTENSION_PATTERN.test(extensionId) ? "high" : "medium",
+      category: "workspace-extensions",
+      reason: "workspace recommends an extension outside the approved allowlist",
+      evidence: extensionId,
+      message: "Workspace recommendations include an extension that is not on the approved allowlist.",
+      suggestedAction: "Recommend only approved extensions and require manual approval for any additional Marketplace installs.",
+      confidence: "high"
+    }));
+  }
+
+  if (latexFiles.length > 0 && recommendedLatexExtensions.length > 0) {
+    const recommendedLatex = recommendations.filter((entry) => recommendedLatexExtensions.includes(entry));
+    const nonLatexRecommendations = recommendations.filter((entry) => !recommendedLatexExtensions.includes(entry));
+
+    if (recommendedLatex.length === 0 || nonLatexRecommendations.length > 0) {
+      findings.push(createFinding(file, findLineNumber(lines, /"recommendations"\s*:/), {
+        id: "WG-WS-006",
+        severity: "medium",
+        category: "workspace-extensions",
+        reason: "LaTeX workspace recommendations do not match the approved LaTeX extension policy",
+        evidence: recommendations.join(", ") || "recommendations: []",
+        message: "LaTeX-related files are present, but the workspace does not recommend only the approved LaTeX extension set.",
+        suggestedAction: `Keep LaTeX workspace recommendations limited to the approved extension IDs: ${recommendedLatexExtensions.join(", ")}.`,
+        confidence: "medium"
+      }));
+    }
+  }
+
+  return findings;
+}
+
+function scanLatexWorkspaceInputs(file: string): GithubMetadataFinding[] {
+  return [createFinding(file, undefined, {
+    id: "WG-WS-007",
+    severity: "info",
+    category: "latex-inputs",
+    reason: "workspace contains LaTeX source or support files that should be treated as untrusted input",
+    evidence: file,
+    message: "LaTeX source, bibliography, class, and style files should be reviewed before trust because they can influence tooling and build behavior.",
+    suggestedAction: "Treat .tex, .bib, .cls, and .sty files as untrusted input until the workspace and its build configuration have been reviewed.",
+    confidence: "high"
+  })];
+}
+
 export async function scanGithubMetadata(
   rootPath: string,
   options: GithubMetadataScanOptions = {}
 ): Promise<GithubMetadataScanResult> {
   const fileSystem = options.fs ?? defaultFs;
-  const githubFiles = await walkDirectory(fileSystem, path.join(rootPath, ".github"));
+  const workspaceFiles = await walkDirectory(fileSystem, rootPath);
+  const githubFiles = workspaceFiles.filter((filePath) => {
+    const relativeFilePath = toRelativePath(rootPath, filePath);
+    return relativeFilePath.startsWith(".github/");
+  });
+  const workspaceReviewFiles = workspaceFiles.filter((filePath) => {
+    const relativeFilePath = toRelativePath(rootPath, filePath);
+    return VSCODE_SETTINGS_FILE_PATTERN.test(relativeFilePath)
+      || VSCODE_TASKS_FILE_PATTERN.test(relativeFilePath)
+      || VSCODE_LAUNCH_FILE_PATTERN.test(relativeFilePath)
+      || VSCODE_EXTENSIONS_FILE_PATTERN.test(relativeFilePath)
+      || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath);
+  });
+  const latexFiles = workspaceFiles
+    .map((filePath) => toRelativePath(rootPath, filePath))
+    .filter((relativeFilePath) => LATEX_INPUT_FILE_PATTERN.test(relativeFilePath));
   const findings: GithubMetadataFinding[] = [];
   const workflowContents = new Map<string, string>();
   const resolutionContext: WorkflowResolutionContext = {
@@ -1311,6 +1557,33 @@ export async function scanGithubMetadata(
     }
   }
 
+  for (const filePath of workspaceReviewFiles) {
+    const relativeFilePath = toRelativePath(rootPath, filePath);
+    const content = await fileSystem.readFile(filePath, "utf8");
+
+    if (VSCODE_SETTINGS_FILE_PATTERN.test(relativeFilePath) || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanWorkspaceSettingsLikeFile(relativeFilePath, content));
+    }
+
+    if (VSCODE_TASKS_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanTasksFile(relativeFilePath, content));
+      continue;
+    }
+
+    if (VSCODE_LAUNCH_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanLaunchFile(relativeFilePath, content));
+      continue;
+    }
+
+    if (VSCODE_EXTENSIONS_FILE_PATTERN.test(relativeFilePath) || CODE_WORKSPACE_FILE_PATTERN.test(relativeFilePath)) {
+      findings.push(...scanExtensionsFile(relativeFilePath, content, options, latexFiles));
+    }
+  }
+
+  if (latexFiles.length > 0) {
+    findings.push(...scanLatexWorkspaceInputs(latexFiles[0]));
+  }
+
   findings.sort((left, right) => {
     if (left.file === right.file) {
       return (left.line ?? 0) - (right.line ?? 0);
@@ -1321,6 +1594,8 @@ export async function scanGithubMetadata(
 
   const scannedFiles = [
     ...githubFiles.map((filePath) => toRelativePath(rootPath, filePath)),
+    ...workspaceReviewFiles.map((filePath) => toRelativePath(rootPath, filePath)),
+    ...(latexFiles.length > 0 ? [latexFiles[0]] : []),
     ...resolutionContext.resolvedExternalFiles
   ].sort();
 
@@ -1339,7 +1614,7 @@ export async function scanGithubMetadata(
 
 export function formatGithubMetadataScanResult(result: GithubMetadataScanResult): string {
   if (result.findings.length === 0) {
-    return "No .github findings detected.";
+    return "No repository-trust findings detected.";
   }
 
   return result.findings.map((finding) => {

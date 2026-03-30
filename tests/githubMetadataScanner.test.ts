@@ -125,7 +125,92 @@ jobs:
     const result = await scanGithubMetadata(rootPath);
 
     expect(result.findings).toEqual([]);
-    expect(formatGithubMetadataScanResult(result)).toContain("No .github findings");
+    expect(formatGithubMetadataScanResult(result)).toContain("No repository-trust findings");
+  });
+
+  it("detects risky workspace settings, task automation, and extension recommendations", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".vscode/settings.json", `{
+  "terminal.integrated.defaultProfile.linux": "danger",
+  "task.allowAutomaticTasks": "on"
+}`);
+    await writeRepoFile(rootPath, ".vscode/tasks.json", `{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "latexmk -pdf main.tex",
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    }
+  ]
+}`);
+    await writeRepoFile(rootPath, ".vscode/launch.json", `{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach",
+      "type": "node",
+      "request": "launch",
+      "preLaunchTask": "build"
+    }
+  ]
+}`);
+    await writeRepoFile(rootPath, ".vscode/extensions.json", `{
+  "recommendations": [
+    "LaTeX-Secure-Workspace",
+    "example.shell-runner"
+  ]
+}`);
+    await writeRepoFile(rootPath, "main.tex", `\\documentclass{article}
+\\begin{document}
+Hello
+\\end{document}
+`);
+
+    const result = await scanGithubMetadata(rootPath);
+    const findingIds = result.findings.map((finding) => finding.id);
+
+    expect(findingIds).toEqual(expect.arrayContaining([
+      "WG-WS-001",
+      "WG-WS-002",
+      "WG-WS-003",
+      "WG-WS-004",
+      "WG-WS-005",
+      "WG-WS-007"
+    ]));
+    expect(result.scannedFiles).toEqual(expect.arrayContaining([
+      ".vscode/settings.json",
+      ".vscode/tasks.json",
+      ".vscode/launch.json",
+      ".vscode/extensions.json",
+      "main.tex"
+    ]));
+  });
+
+  it("flags LaTeX workspaces that recommend extensions outside the approved LaTeX set", async () => {
+    const rootPath = await mkdtemp(path.join(tmpdir(), "workspace-guard-gh-"));
+    tempDirs.push(rootPath);
+    await writeRepoFile(rootPath, ".vscode/extensions.json", `{
+  "recommendations": [
+    "example.latex-helper"
+  ]
+}`);
+    await writeRepoFile(rootPath, "paper.sty", `% custom style`);
+
+    const result = await scanGithubMetadata(rootPath, {
+      recommendedLatexExtensionIds: ["LaTeX-Secure-Workspace"]
+    });
+
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "WG-WS-006",
+        file: ".vscode/extensions.json"
+      })
+    ]));
   });
 
   it("flags workflows without explicit permissions", async () => {

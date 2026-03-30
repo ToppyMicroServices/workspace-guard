@@ -119,6 +119,35 @@ function createTemplateRemediation(finding: GithubMetadataFinding): GithubFindin
   };
 }
 
+function createWorkspaceExecutionRemediation(finding: GithubMetadataFinding): GithubFindingRemediation {
+  return {
+    title: "Review workspace execution surfaces before trusting this repository",
+    summary: finding.suggestedAction,
+    steps: [
+      "Treat .vscode/settings.json, tasks.json, launch.json, and .code-workspace files like executable code review inputs.",
+      "Keep automatic task execution and shell-based helpers disabled until the repository is approved.",
+      "Prefer Restricted Mode and narrow allowlists for workspace-recommended extensions."
+    ]
+  };
+}
+
+function createExtensionAllowlistRemediation(finding: GithubMetadataFinding): GithubFindingRemediation {
+  return {
+    title: "Restrict workspace extension recommendations to the approved allowlist",
+    summary: finding.suggestedAction,
+    steps: [
+      "Remove extension recommendations that are not explicitly approved.",
+      "For LaTeX workspaces, keep recommendations limited to the approved secure LaTeX extension set.",
+      "Require manual approval before installing any additional Marketplace extensions."
+    ],
+    snippet: `{
+  "recommendations": [
+    "LaTeX-Secure-Workspace"
+  ]
+}`
+  };
+}
+
 function createDefaultRemediation(finding: GithubMetadataFinding): GithubFindingRemediation {
   return {
     title: "Review and remediate this finding",
@@ -160,6 +189,15 @@ export function buildGithubFindingRemediation(finding: GithubMetadataFinding): G
     case "WG-GHTM-001":
     case "WG-GHTM-002":
       return createTemplateRemediation(finding);
+    case "WG-WS-001":
+    case "WG-WS-002":
+    case "WG-WS-003":
+    case "WG-WS-004":
+    case "WG-WS-007":
+      return createWorkspaceExecutionRemediation(finding);
+    case "WG-WS-005":
+    case "WG-WS-006":
+      return createExtensionAllowlistRemediation(finding);
     default:
       return createDefaultRemediation(finding);
   }

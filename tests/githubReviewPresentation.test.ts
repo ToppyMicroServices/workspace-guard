@@ -52,7 +52,7 @@ describe("githubReviewPresentation", () => {
     const report = createReport();
     const summary = summarizeGithubMetadataReports([report]);
 
-    expect(formatGithubMetadataSummary(summary)).toContain("2 .github findings");
+    expect(formatGithubMetadataSummary(summary)).toContain("2 repository review findings");
     expect(getGithubReviewTrustLevel(summary)).toBe("high-risk");
     expect(formatGithubTrustLabel(summary)).toBe("High Risk");
     expect(formatGithubMetadataWorkspaceLabel(report)).toBe("demo-repo");
@@ -74,7 +74,7 @@ describe("githubReviewPresentation", () => {
     };
     const summary = summarizeGithubMetadataReports([report]);
 
-    expect(formatGithubMetadataSummary(summary)).toBe("Workspace Guard found no .github risks in the current workspace.");
+    expect(formatGithubMetadataSummary(summary)).toBe("Workspace Guard found no repository-trust risks in the current workspace.");
     expect(formatGithubMetadataWorkspaceSummary(report)).toBe("No findings");
   });
 
@@ -91,7 +91,7 @@ describe("githubReviewPresentation", () => {
     const summary = summarizeGithubMetadataReports([report]);
     const markdown = formatGithubMetadataReportsMarkdown([report], summary, "all");
 
-    expect(markdown).toContain("# Workspace Guard .github Review");
+    expect(markdown).toContain("# Workspace Guard Repository Review");
     expect(markdown).toContain("Trust: High Risk");
     expect(markdown).toContain("Suggested action: Use pull_request instead.");
   });
