@@ -1,6 +1,7 @@
 export * from "./core/pathPolicy";
 export * from "./core/config";
 export * from "./core/escapeFolder";
+export * from "./core/extensionPolicy";
 export * from "./core/githubMetadataScanner";
 export * from "./core/outputChannel";
 export * from "./core/settingsBackup";

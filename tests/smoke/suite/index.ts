@@ -50,7 +50,7 @@ export async function run(): Promise<void> {
   assert.ok(snapshot.summary.highFindings >= 1);
 
   const allNodes = flattenTree(snapshot.nodes);
-  assert.ok(allNodes.some((node) => node.kind === "summary" && node.label.includes(".github findings")));
+  assert.ok(allNodes.some((node) => node.kind === "summary" && node.label.includes("review findings")));
   assert.ok(allNodes.some((node) => node.kind === "workspace" && node.label.includes("smoke-risky-workspace")));
   assert.ok(allNodes.some((node) => node.kind === "finding" && (
     node.label.includes("pull_request_target")

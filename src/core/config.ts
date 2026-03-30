@@ -27,6 +27,9 @@ export interface HomeguardSafetySettings {
 
 export interface HomeguardGithubReviewSettings {
   checkOnStartup: boolean;
+  allowedExtensionIds: string[];
+  recommendedLatexExtensionIds: string[];
+  warnOnTrustedWorkspace: boolean;
 }
 
 export interface HomeguardSettings {
@@ -92,7 +95,15 @@ export function getDefaultHomeguardSettings(): HomeguardSettings {
       backupBeforeApply: true
     },
     githubReview: {
-      checkOnStartup: true
+      checkOnStartup: true,
+      allowedExtensionIds: [
+        "ToppyMicroServices.workspace-guard",
+        "LaTeX-Secure-Workspace"
+      ],
+      recommendedLatexExtensionIds: [
+        "LaTeX-Secure-Workspace"
+      ],
+      warnOnTrustedWorkspace: true
     },
     verbose: false
   };
@@ -120,7 +131,9 @@ export function resolveHomeguardSettings(input: HomeguardSettingsInput = {}): Ho
     },
     githubReview: {
       ...defaults.githubReview,
-      ...input.githubReview
+      ...input.githubReview,
+      allowedExtensionIds: input.githubReview?.allowedExtensionIds ?? defaults.githubReview.allowedExtensionIds,
+      recommendedLatexExtensionIds: input.githubReview?.recommendedLatexExtensionIds ?? defaults.githubReview.recommendedLatexExtensionIds
     }
   };
 }

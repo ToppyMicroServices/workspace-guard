@@ -87,7 +87,7 @@
       },
       {
         "command": "homeguard.reviewGithubAutomation",
-        "title": "Review .github Automation",
+        "title": "Review Repository Trust Surfaces",
         "category": "Workspace Guard"
       },
       {
@@ -257,7 +257,33 @@
         "homeguard.githubReview.checkOnStartup": {
           "type": "boolean",
           "default": true,
-          "description": "Review .github automation in the current workspace on startup and warn when medium or high-risk findings are present."
+          "description": "Review .github automation, workspace settings, extension recommendations, and LaTeX trust surfaces on startup."
+        },
+        "homeguard.githubReview.allowedExtensionIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "ToppyMicroServices.workspace-guard",
+            "LaTeX-Secure-Workspace"
+          ],
+          "description": "Extension IDs allowed in workspace recommendations and local LaTeX trust policy checks."
+        },
+        "homeguard.githubReview.recommendedLatexExtensionIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "LaTeX-Secure-Workspace"
+          ],
+          "description": "Extension IDs that LaTeX workspaces should recommend instead of arbitrary Marketplace installs."
+        },
+        "homeguard.githubReview.warnOnTrustedWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when a workspace is already trusted before repository review is complete."
         },
         "homeguard.safety.enableSaveGuard": {
           "type": "boolean",

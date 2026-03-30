@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import * as vscode from "vscode";
 
-import { type HomeguardMode, type HomeguardSettingsInput } from "./core/config";
+import { resolveHomeguardSettings, type HomeguardMode, type HomeguardSettingsInput } from "./core/config";
 import {
   formatGithubMetadataScanResult,
   scanGithubMetadata,
@@ -11,6 +11,7 @@ import {
   type GithubMetadataScanResult
 } from "./core/githubMetadataScanner";
 import { DEFAULT_TELEMETRY_PROFILE } from "./core/telemetry";
+import { reviewInstalledExtensions } from "./core/extensionPolicy";
 import type { SettingsStore } from "./core/settingsBackup";
 import {
   activateHomeguardExtension,
@@ -106,10 +107,10 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
       const trustLabel = formatGithubTrustLabel(element.summary);
       const filteredCount = element.filteredSummary.totalFindings;
       const heading = element.filter === "all"
-        ? `${trustLabel}: ${element.summary.totalFindings} .github findings`
+        ? `${trustLabel}: ${element.summary.totalFindings} review findings`
         : `${trustLabel}: ${filteredCount} ${element.filter} finding${filteredCount === 1 ? "" : "s"}`;
       const item = new vscode.TreeItem(
-        element.summary.totalFindings === 0 ? "Safe: No .github risks" : heading,
+        element.summary.totalFindings === 0 ? "Safe: No repository review risks" : heading,
         vscode.TreeItemCollapsibleState.None
       );
       item.description = element.filter === "all"
@@ -151,7 +152,7 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
     );
     item.command = {
       command: "homeguard.suggestGithubRemediation",
-      title: "Suggest .github Remediation",
+      title: "Suggest Repository Remediation",
       arguments: [element.finding, element.rootPath]
     };
     return item;
@@ -161,7 +162,7 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
     if (!element) {
       const scannedReports = this.reports.filter((report) => report.scannedFiles.length > 0);
       if (scannedReports.length === 0) {
-        return [{ kind: "empty", label: "No .github files in the current workspace." }];
+        return [{ kind: "empty", label: "No reviewable repository files in the current workspace." }];
       }
 
       const filteredEntries = scannedReports.map((report) => ({
@@ -198,7 +199,7 @@ class GithubReviewTreeProvider implements vscode.TreeDataProvider<GithubReviewTr
           kind: "empty",
           label: element.filter === "all" ? "No findings" : `No ${element.filter} findings`,
           description: element.filter === "all"
-            ? "This workspace .github review is clean."
+            ? "This workspace repository review is clean."
             : `This workspace has no ${element.filter} findings under the current filter.`
         }];
       }
@@ -340,7 +341,10 @@ async function cleanupEphemeralWorkspaceFolders(removedWorkspacePaths: readonly 
   }));
 }
 
-function createHost(outputChannel: vscode.OutputChannel): HomeguardExtensionHost {
+function createHost(
+  outputChannel: vscode.OutputChannel,
+  getSettings: () => ReturnType<typeof getHomeguardSettings>
+): HomeguardExtensionHost {
   const telemetryKeys = DEFAULT_TELEMETRY_PROFILE.map((entry) => entry.key);
 
   return {
@@ -387,7 +391,13 @@ function createHost(outputChannel: vscode.OutputChannel): HomeguardExtensionHost
         dispose: () => disposable.dispose()
       };
     },
-    scanGithubMetadata: async (rootPath) => await scanGithubMetadata(rootPath)
+    scanGithubMetadata: async (rootPath) => {
+      const settings = resolveHomeguardSettings(getSettings());
+      return await scanGithubMetadata(rootPath, {
+        allowedExtensionIds: settings.githubReview.allowedExtensionIds,
+        recommendedLatexExtensionIds: settings.githubReview.recommendedLatexExtensionIds
+      });
+    }
   };
 }
 
@@ -656,7 +666,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const outputChannel = vscode.window.createOutputChannel("Workspace Guard");
   context.subscriptions.push(outputChannel);
 
-  const host = createHost(outputChannel);
+  const host = createHost(outputChannel, getHomeguardSettings);
   let activation = await activateHomeguardExtension(host, getHomeguardSettings());
   context.subscriptions.push({
     dispose: () => activation.dispose()
@@ -670,6 +680,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     showCollapseAll: true
   });
   context.subscriptions.push(githubReviewTreeView);
+  const interactiveWarningsEnabled = context.extensionMode !== vscode.ExtensionMode.Test;
 
   const refreshGithubReviewTree = async (reports?: GithubMetadataScanResult[]): Promise<GithubMetadataScanResult[]> => {
     const nextReports = reports ?? await createHomeguardCommandHandlers(host, getHomeguardSettings()).reviewGithubMetadata();
@@ -686,9 +697,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(formatTelemetrySummary(activation.telemetryReport.actionableChanges.length));
   }
 
-  if (activation.githubMetadataSummary && activation.githubMetadataReports) {
+  if (interactiveWarningsEnabled && activation.githubMetadataSummary && activation.githubMetadataReports) {
     const selection = await vscode.window.showWarningMessage(
-      `${formatGithubMetadataSummary(activation.githubMetadataSummary)} Review this repository before trusting its automation.`,
+      `${formatGithubMetadataSummary(activation.githubMetadataSummary)} Review this repository before granting trust or enabling extra extensions.`,
       "Open Review"
     );
 
@@ -696,6 +707,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       writeGithubMetadataReports(outputChannel, activation.githubMetadataReports);
       outputChannel.show(true);
     }
+  }
+
+  const resolvedSettings = resolveHomeguardSettings(getHomeguardSettings());
+  const extensionPolicyFindings = reviewInstalledExtensions(
+    host.installedExtensions,
+    resolvedSettings.githubReview.allowedExtensionIds
+  );
+  if (interactiveWarningsEnabled && extensionPolicyFindings.length > 0) {
+    const firstFinding = extensionPolicyFindings[0];
+    await vscode.window.showWarningMessage(
+      `${firstFinding.message} Keep untrusted LaTeX workspaces in Restricted Mode until approved extensions are in place.`
+    );
+  }
+
+  if (
+    interactiveWarningsEnabled
+    && resolvedSettings.githubReview.warnOnTrustedWorkspace
+    && vscode.workspace.isTrusted
+    && (activation.githubMetadataSummary?.totalFindings ?? 0) > 0
+  ) {
+    await vscode.window.showWarningMessage(
+      "This workspace is already trusted. For unknown repositories, keep VS Code in Restricted Mode until the repository review is clean."
+    );
   }
 
   await updateStoredRecentWorkspaces(context);

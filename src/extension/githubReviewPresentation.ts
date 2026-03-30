@@ -37,7 +37,7 @@ export function formatGithubTrustLabel(summary: GithubMetadataReviewSummary): st
 
 export function formatGithubMetadataSummary(summary: GithubMetadataReviewSummary): string {
   if (summary.totalFindings === 0) {
-    return "Workspace Guard found no .github risks in the current workspace.";
+    return "Workspace Guard found no repository-trust risks in the current workspace.";
   }
 
   const severityParts: string[] = [];
@@ -51,7 +51,7 @@ export function formatGithubMetadataSummary(summary: GithubMetadataReviewSummary
     severityParts.push(`${summary.infoFindings} info`);
   }
 
-  return `Workspace Guard found ${summary.totalFindings} .github finding${summary.totalFindings === 1 ? "" : "s"} across ${summary.workspaceFoldersWithRisk} workspace folder${summary.workspaceFoldersWithRisk === 1 ? "" : "s"} (${severityParts.join(", ")}).`;
+  return `Workspace Guard found ${summary.totalFindings} repository review finding${summary.totalFindings === 1 ? "" : "s"} across ${summary.workspaceFoldersWithRisk} workspace folder${summary.workspaceFoldersWithRisk === 1 ? "" : "s"} (${severityParts.join(", ")}).`;
 }
 
 export function filterGithubMetadataReport(
@@ -75,7 +75,7 @@ export function formatGithubMetadataWorkspaceSummary(
   const filteredReport = filterGithubMetadataReport(report, filter);
 
   if (report.scannedFiles.length === 0) {
-    return "No .github files";
+    return "No reviewable repository files";
   }
 
   if (filteredReport.findings.length === 0) {
@@ -120,7 +120,7 @@ export function formatGithubMetadataReportsMarkdown(
   filter: GithubReviewSeverityFilter = "all"
 ): string {
   const lines = [
-    "# Workspace Guard .github Review",
+    "# Workspace Guard Repository Review",
     "",
     `Trust: ${formatGithubTrustLabel(summary)}`,
     formatGithubMetadataSummary(summary),
