@@ -356,7 +356,7 @@
     "url": "https://github.com/ToppyMicroServices/workspace-guard/issues"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.5.2",
     "@types/vscode": "^1.110.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.7.1",
