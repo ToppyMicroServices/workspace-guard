@@ -4,10 +4,50 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    open-pull-requests-limit: 10
+      time: "03:05"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 8
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps"
+    groups:
+      testing-toolchain:
+        patterns:
+          - "vitest"
+          - "fast-check"
+          - "@types/node"
+          - "@types/vscode"
+        update-types:
+          - "minor"
+          - "patch"
+      release-tooling:
+        patterns:
+          - "@vscode/vsce"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
-    open-pull-requests-limit: 10
+      time: "03:20"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 8
+    rebase-strategy: "auto"
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "security"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

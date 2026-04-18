@@ -12,6 +12,7 @@ jobs:
   publish-marketplace:
     name: Publish To VS Code Marketplace
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
 
@@ -59,11 +60,24 @@ jobs:
       - name: Verify Marketplace release
         run: |
           EXPECTED_VERSION="$(node -p "require('./package.json').version")"
-          npm run verify:marketplace-release -- \
-            --publisher ToppyMicroServices \
-            --name workspace-guard \
-            --version "$EXPECTED_VERSION" \
-            --mode universal
+          for attempt in 1 2 3; do
+            if npm run verify:marketplace-release -- \
+              --publisher ToppyMicroServices \
+              --name workspace-guard \
+              --version "$EXPECTED_VERSION" \
+              --mode universal \
+              --timeout-seconds 180 \
+              --poll-seconds 10; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+
+            echo "Marketplace verification attempt ${attempt} failed; retrying after backoff..." >&2
+            sleep 30
+          done
 
       - name: Upload VSIX to GitHub release
         env:
