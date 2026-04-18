@@ -1,0 +1,78 @@
+name: Dependency Maintenance
+
+on:
+  schedule:
+    - cron: "35 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dependency-maintenance
+  cancel-in-progress: false
+
+jobs:
+  refresh-dependabot-prs:
+    name: Refresh Dependabot PRs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Refresh open Dependabot PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh pr list \
+            --repo "${REPOSITORY}" \
+            --state open \
+            --author app/dependabot \
+            --json number,title,isCrossRepository,mergeStateStatus,headRefName,url > dependabot-prs.json
+
+          TOTAL=$(jq 'length' dependabot-prs.json)
+          UPDATED=0
+          SKIPPED=0
+
+          {
+            echo "# Dependency maintenance"
+            echo
+            echo "- Open Dependabot PRs: ${TOTAL}"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${TOTAL}" -eq 0 ]; then
+            echo "No open Dependabot PRs." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          while IFS=$'\t' read -r NUMBER TITLE CROSS_REPO MERGE_STATE URL; do
+            if [ "${CROSS_REPO}" = "true" ]; then
+              echo "- Skipped #${NUMBER} (${TITLE}): cross-repository PR" >> "${GITHUB_STEP_SUMMARY}"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if [ "${MERGE_STATE}" = "DIRTY" ]; then
+              echo "- Skipped #${NUMBER} (${TITLE}): merge conflicts" >> "${GITHUB_STEP_SUMMARY}"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            if gh pr update-branch "${NUMBER}" --repo "${REPOSITORY}" --rebase; then
+              echo "- Refreshed #${NUMBER}: ${URL}" >> "${GITHUB_STEP_SUMMARY}"
+              UPDATED=$((UPDATED + 1))
+            else
+              echo "- Left #${NUMBER} unchanged (update-branch failed): ${URL}" >> "${GITHUB_STEP_SUMMARY}"
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done < <(jq -r '.[] | [.number, .title, .isCrossRepository, .mergeStateStatus, .url] | @tsv' dependabot-prs.json)
+
+          {
+            echo
+            echo "- Refreshed: ${UPDATED}"
+            echo "- Skipped: ${SKIPPED}"
+          } >> "${GITHUB_STEP_SUMMARY}"

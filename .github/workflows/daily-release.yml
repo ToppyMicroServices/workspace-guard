@@ -17,6 +17,7 @@ jobs:
   daily-prerelease:
     name: Build Daily Prerelease
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: write
       pull-requests: read
@@ -229,8 +230,21 @@ jobs:
 
       - name: Verify Marketplace prerelease
         run: |
-          npm run verify:marketplace-release -- \
-            --publisher ToppyMicroServices \
-            --name workspace-guard \
-            --version "$DAILY_VERSION" \
-            --mode universal
+          for attempt in 1 2 3; do
+            if npm run verify:marketplace-release -- \
+              --publisher ToppyMicroServices \
+              --name workspace-guard \
+              --version "$DAILY_VERSION" \
+              --mode universal \
+              --timeout-seconds 180 \
+              --poll-seconds 10; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+
+            echo "Marketplace prerelease verification attempt ${attempt} failed; retrying after backoff..." >&2
+            sleep 30
+          done
