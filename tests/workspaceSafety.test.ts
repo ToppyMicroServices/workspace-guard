@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +96,27 @@ describe("assessWorkspaceSafety", () => {
     expect(assessment.classification).toBe("elevated");
     expect(assessment.highRiskFolders).toEqual(["/Users/akira/.ssh"]);
   });
+
+  it("detects .env-style files as secret-bearing without reading contents", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    const projectPath = path.join(sandbox, "project");
+    await mkdir(path.join(projectPath, "apps", "web"), { recursive: true });
+    await writeFile(path.join(projectPath, "apps", "web", ".env.production"), "API_TOKEN=secret\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: projectPath }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    expect(assessment.classification).toBe("elevated");
+    expect(assessment.secretBearingFiles.map((entry) => path.relative(projectPath, entry))).toEqual([
+      path.join("apps", "web", ".env.production")
+    ]);
+  });
 });
 
 describe("evaluateWorkspaceAction", () => {
@@ -188,6 +209,57 @@ describe("evaluateWorkspaceAction", () => {
     }, assessment);
 
     expect(evaluation.enforcement).toBe("confirm");
+  });
+
+  it("confirms broad git operations when .env-style files are present", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    const projectPath = path.join(sandbox, "project");
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(path.join(projectPath, ".env.local"), "TOKEN=secret\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: projectPath }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    const evaluation = evaluateWorkspaceAction({
+      actionType: "git",
+      gitOperation: "add-all",
+      command: "git add -A",
+      label: "Stage all"
+    }, assessment);
+
+    expect(evaluation.enforcement).toBe("confirm");
+    expect(evaluation.reason).toContain(".env-style secret-bearing files");
+  });
+
+  it("blocks publish when .env-style files are present", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    const projectPath = path.join(sandbox, "project");
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(path.join(projectPath, ".env"), "TOKEN=secret\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: projectPath }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    const evaluation = evaluateWorkspaceAction({
+      actionType: "publish",
+      command: "npm publish",
+      label: "Publish package"
+    }, assessment);
+
+    expect(evaluation.enforcement).toBe("block");
+    expect(evaluation.reason).toContain(".env-style secret-bearing files");
   });
 
   it("warns task execution in elevated workspaces", async () => {

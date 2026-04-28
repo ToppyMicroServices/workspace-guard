@@ -417,7 +417,8 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
   const parts = [
     `Classification: ${assessment.classification}`,
     `Home folders: ${assessment.homeFolders.length}`,
-    `High-risk folders: ${assessment.highRiskFolders.length}`
+    `High-risk folders: ${assessment.highRiskFolders.length}`,
+    `Secret-bearing files: ${assessment.secretBearingFiles.length}`
   ];
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
 }

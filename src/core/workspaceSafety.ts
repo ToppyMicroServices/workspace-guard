@@ -1,4 +1,6 @@
+import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
+import path from "node:path";
 
 import type { HomeguardSettings, HomeguardSettingsInput } from "./config";
 import { resolveHomeguardSettings } from "./config";
@@ -22,11 +24,26 @@ export interface WorkspaceFolderDescriptor {
   path: string;
 }
 
+export interface WorkspaceSafetyDirentLike {
+  name: string;
+  isDirectory: () => boolean;
+  isFile: () => boolean;
+  isSymbolicLink?: () => boolean;
+}
+
+export interface WorkspaceSafetyFs {
+  readdir: (
+    targetPath: string,
+    options: { withFileTypes: true }
+  ) => Promise<WorkspaceSafetyDirentLike[]>;
+}
+
 export interface WorkspaceSafetyContext {
   workspaceFolders: WorkspaceFolderDescriptor[];
   homeDir?: string;
   env?: Record<string, string | undefined>;
   platform?: SupportedPlatform;
+  fs?: WorkspaceSafetyFs;
   realpath?: (candidate: string) => Promise<string>;
 }
 
@@ -36,6 +53,7 @@ export interface WorkspaceSafetyAssessment {
   hasHomeFolder: boolean;
   homeFolders: string[];
   highRiskFolders: string[];
+  secretBearingFiles: string[];
   workspaceFolders: string[];
 }
 
@@ -64,6 +82,28 @@ export interface WorkspaceSafetyEvaluation {
 const DESTRUCTIVE_COMMAND_PATTERN = /(^|\s)(rm\s+-rf|rm\s+-fr|git\s+clean\s+-fd|git\s+reset\s+--hard|find\s+.+-delete|chmod\s+-R|chown\s+-R|mkfs|dd\s+if=|terraform\s+destroy|aws\s+s3\s+rm|gcloud\s+storage\s+rm|kubectl\s+delete)(\s|$)/i;
 const PUBLISH_COMMAND_PATTERN = /(^|\s)(npm\s+publish|vsce\s+publish|ovsx\s+publish|twine\s+upload|cargo\s+publish|gh\s+release\s+create)(\s|$)/i;
 const BROAD_GIT_OPERATION_PATTERN = /(^|\s)(git\s+add\s+-A|git\s+add\s+--all|git\s+commit\b|git\s+push\b)(\s|$)/i;
+const SECRET_BEARING_ENV_FILE_PATTERN = /^\.env(?:\..+)?$/i;
+const SECRET_BEARING_SCAN_MAX_DEPTH = 4;
+const SECRET_BEARING_SCAN_MAX_DIRECTORIES = 200;
+const SECRET_BEARING_SCAN_MAX_FILES = 50;
+const SECRET_BEARING_SCAN_IGNORED_DIRS = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".beads",
+  "node_modules",
+  "dist",
+  "out",
+  "build",
+  ".next",
+  ".nuxt",
+  ".venv",
+  "vendor"
+]);
+
+const defaultFs: WorkspaceSafetyFs = {
+  readdir: fs.readdir
+};
 
 function mapSeverity(riskScore: number): WorkspaceSafetySeverity {
   if (riskScore >= 90) {
@@ -129,35 +169,95 @@ function createEvaluation(
   };
 }
 
+export function isSecretBearingEnvFileName(fileName: string): boolean {
+  return SECRET_BEARING_ENV_FILE_PATTERN.test(fileName);
+}
+
+async function scanSecretBearingFiles(
+  rootPath: string,
+  fsImpl: WorkspaceSafetyFs
+): Promise<string[]> {
+  const found: string[] = [];
+  let visitedDirectories = 0;
+
+  async function visit(directoryPath: string, depth: number): Promise<void> {
+    if (
+      found.length >= SECRET_BEARING_SCAN_MAX_FILES
+      || visitedDirectories >= SECRET_BEARING_SCAN_MAX_DIRECTORIES
+      || depth > SECRET_BEARING_SCAN_MAX_DEPTH
+    ) {
+      return;
+    }
+
+    visitedDirectories += 1;
+
+    let entries: WorkspaceSafetyDirentLike[];
+    try {
+      entries = await fsImpl.readdir(directoryPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (found.length >= SECRET_BEARING_SCAN_MAX_FILES) {
+        return;
+      }
+
+      if (entry.isFile() && isSecretBearingEnvFileName(entry.name)) {
+        found.push(path.join(directoryPath, entry.name));
+        continue;
+      }
+
+      if (
+        entry.isDirectory()
+        && !entry.isSymbolicLink?.()
+        && !SECRET_BEARING_SCAN_IGNORED_DIRS.has(entry.name)
+      ) {
+        await visit(path.join(directoryPath, entry.name), depth + 1);
+      }
+    }
+  }
+
+  await visit(rootPath, 0);
+  return found;
+}
+
 export async function assessWorkspaceSafety(
   context: WorkspaceSafetyContext,
   settingsInput: HomeguardSettingsInput = {}
 ): Promise<WorkspaceSafetyAssessment> {
   const settings = resolveHomeguardSettings(settingsInput);
   const homeDir = context.homeDir ?? homedir();
+  const fsImpl = context.fs ?? defaultFs;
   const results = await Promise.all(
     context.workspaceFolders.map(async (folder) => {
-      const risk = await evaluatePathRisk(folder.path, {
-        cwd: homeDir,
-        env: context.env,
-        homeDir,
-        platform: context.platform,
-        allowList: settings.allowList,
-        highRiskFolders: settings.highRiskFolders,
-        realpath: context.realpath
-      });
+      const [risk, secretBearingFiles] = await Promise.all([
+        evaluatePathRisk(folder.path, {
+          cwd: homeDir,
+          env: context.env,
+          homeDir,
+          platform: context.platform,
+          allowList: settings.allowList,
+          highRiskFolders: settings.highRiskFolders,
+          realpath: context.realpath
+        }),
+        scanSecretBearingFiles(folder.path, fsImpl)
+      ]);
 
       return {
         path: folder.path,
         isHomePath: risk.isHomePath,
-        isHighRiskPath: risk.isHighRiskPath
+        isHighRiskPath: risk.isHighRiskPath,
+        secretBearingFiles
       };
     })
   );
 
   const homeFolders = results.filter((entry) => entry.isHomePath).map((entry) => entry.path);
   const highRiskFolders = results.filter((entry) => entry.isHighRiskPath).map((entry) => entry.path);
-  const riskScore = Math.min(100, (homeFolders.length * 80) + (highRiskFolders.length * 25));
+  const secretBearingFiles = results.flatMap((entry) => entry.secretBearingFiles);
+  const secretBearingFileRisk = secretBearingFiles.length > 0 ? 35 : 0;
+  const riskScore = Math.min(100, (homeFolders.length * 80) + (highRiskFolders.length * 25) + secretBearingFileRisk);
 
   return {
     classification: mapClassification(riskScore),
@@ -165,6 +265,7 @@ export async function assessWorkspaceSafety(
     hasHomeFolder: homeFolders.length > 0,
     homeFolders,
     highRiskFolders,
+    secretBearingFiles,
     workspaceFolders: results.map((entry) => entry.path)
   };
 }
@@ -203,6 +304,24 @@ export function evaluateWorkspaceAction(
 
   const destructive = requestLooksDestructive(request);
   const requiresConfirmation = settings.safety.requireConfirmationForDestructiveActions && destructive;
+  const hasSecretBearingFiles = assessment.secretBearingFiles.length > 0;
+
+  if (hasSecretBearingFiles) {
+    if (request.actionType === "publish" && settings.safety.blockHighRiskPublish) {
+      return createEvaluation(request, assessment, "block", "Publishing is blocked because .env-style secret-bearing files are present.");
+    }
+
+    if (request.actionType === "git") {
+      return createEvaluation(
+        request,
+        assessment,
+        requiresConfirmation ? "confirm" : "warn",
+        destructive
+          ? "Git operations may stage .env-style secret-bearing files."
+          : "Review this Git action carefully because .env-style secret-bearing files are present."
+      );
+    }
+  }
 
   if (request.actionType === "publish" && settings.safety.blockHighRiskPublish) {
     return createEvaluation(request, assessment, "block", "Publishing is blocked in elevated or dangerous workspaces.");
