@@ -52,7 +52,7 @@ The extension produces output through:
 - output panel review summaries
 - exported `.github` review reports in JSON or Markdown
 - workspace actions such as redirecting to an escape folder or removing risky folders from the workspace
-- workspace safety assessments that count `.env`-style secret-bearing files by filename without reading file contents
+- workspace safety assessments that count `.env`-style secret-bearing files by filename without reading file contents, keep `.env.example`-style templates separate, and report when scanning stops at safety limits
 
 ## CLI
 

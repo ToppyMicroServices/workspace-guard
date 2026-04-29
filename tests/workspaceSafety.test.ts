@@ -8,11 +8,14 @@ import {
   assessWorkspaceSafety,
   createWorkspaceSafetyGuard,
   evaluateWorkspaceAction,
+  isEnvTemplateFileName,
+  isSecretBearingEnvFileName,
   type HomeguardExtensionHost,
   type WorkspaceFoldersChangeEventLike
 } from "../src";
 
 const tempDirs: string[] = [];
+const envRiskFixturePath = path.resolve("tests/fixtures/env-risk-workspace");
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(async (dirPath) => {
@@ -116,6 +119,116 @@ describe("assessWorkspaceSafety", () => {
     expect(assessment.secretBearingFiles.map((entry) => path.relative(projectPath, entry))).toEqual([
       path.join("apps", "web", ".env.production")
     ]);
+  });
+
+  it("uses fixture-backed .env classification for secret-bearing and template files", async () => {
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: envRiskFixturePath }],
+      homeDir: path.dirname(envRiskFixturePath),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    expect(assessment.secretBearingFiles.map((entry) => path.relative(envRiskFixturePath, entry)).sort()).toEqual([
+      ".env",
+      ".env.local",
+      ".env.production",
+      path.join("apps", "web", ".env.production")
+    ]);
+    expect(assessment.envTemplateFiles.map((entry) => path.relative(envRiskFixturePath, entry)).sort()).toEqual([
+      ".env.example",
+      path.join("apps", "web", ".env.production.sample")
+    ]);
+    expect(assessment.envFileScan.truncated).toBe(false);
+  });
+
+  it("keeps .env templates separate from secret-bearing files", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    const projectPath = path.join(sandbox, "project");
+    await mkdir(projectPath, { recursive: true });
+    await writeFile(path.join(projectPath, ".env.example"), "TOKEN=\n");
+    await writeFile(path.join(projectPath, ".env.local.template"), "TOKEN=\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: projectPath }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    expect(assessment.classification).toBe("safe");
+    expect(assessment.secretBearingFiles).toEqual([]);
+    expect(assessment.envTemplateFiles.map((entry) => path.relative(projectPath, entry)).sort()).toEqual([
+      ".env.example",
+      ".env.local.template"
+    ]);
+  });
+
+  it("reports when .env scanning is truncated", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    let nestedPath = path.join(sandbox, "project");
+    for (const segment of ["a", "b", "c", "d", "e"]) {
+      nestedPath = path.join(nestedPath, segment);
+    }
+    await mkdir(nestedPath, { recursive: true });
+    await writeFile(path.join(nestedPath, ".env"), "TOKEN=not-a-real-secret\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: path.join(sandbox, "project") }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    expect(assessment.classification).toBe("elevated");
+    expect(assessment.secretBearingFiles).toEqual([]);
+    expect(assessment.envFileScan.truncated).toBe(true);
+    expect(assessment.envFileScan.truncationReasons).toContain("max-depth");
+  });
+
+  it("continues scanning shallow siblings after a deep branch is truncated", async () => {
+    const sandbox = await mkdtemp(path.join(tmpdir(), "homeguard-safety-"));
+    tempDirs.push(sandbox);
+    const projectPath = path.join(sandbox, "project");
+    let nestedPath = projectPath;
+    for (const segment of ["a", "b", "c", "d", "e"]) {
+      nestedPath = path.join(nestedPath, segment);
+    }
+    await mkdir(nestedPath, { recursive: true });
+    await writeFile(path.join(nestedPath, ".env"), "TOKEN=not-a-real-secret\n");
+    await writeFile(path.join(projectPath, ".env.local"), "TOKEN=not-a-real-secret\n");
+
+    const assessment = await assessWorkspaceSafety({
+      workspaceFolders: [{ path: projectPath }],
+      homeDir: path.join(sandbox, "home"),
+      env: {},
+      platform: "darwin",
+      realpath: async (candidate) => candidate
+    });
+
+    expect(assessment.secretBearingFiles.map((entry) => path.relative(projectPath, entry))).toEqual([
+      ".env.local"
+    ]);
+    expect(assessment.envFileScan.truncated).toBe(true);
+    expect(assessment.envFileScan.truncationReasons).toContain("max-depth");
+  });
+});
+
+describe("env file name classification", () => {
+  it("separates likely secret-bearing env files from templates", () => {
+    expect(isSecretBearingEnvFileName(".env")).toBe(true);
+    expect(isSecretBearingEnvFileName(".env.local")).toBe(true);
+    expect(isSecretBearingEnvFileName(".env.production")).toBe(true);
+    expect(isSecretBearingEnvFileName(".envrc")).toBe(false);
+    expect(isSecretBearingEnvFileName(".env.example")).toBe(false);
+    expect(isSecretBearingEnvFileName(".env.production.sample")).toBe(false);
+    expect(isEnvTemplateFileName(".env.example")).toBe(true);
+    expect(isEnvTemplateFileName(".env.local.template")).toBe(true);
   });
 });
 
@@ -260,6 +373,34 @@ describe("evaluateWorkspaceAction", () => {
 
     expect(evaluation.enforcement).toBe("block");
     expect(evaluation.reason).toContain(".env-style secret-bearing files");
+  });
+
+  it("confirms broad git operations when .env scanning is incomplete", async () => {
+    const assessment = {
+      classification: "elevated" as const,
+      riskScore: 20,
+      hasHomeFolder: false,
+      homeFolders: [],
+      highRiskFolders: [],
+      secretBearingFiles: [],
+      envTemplateFiles: [],
+      envFileScan: {
+        directoriesVisited: 200,
+        truncated: true,
+        truncationReasons: ["max-directories" as const]
+      },
+      workspaceFolders: ["/Users/akira/work/projectA"]
+    };
+
+    const evaluation = evaluateWorkspaceAction({
+      actionType: "git",
+      gitOperation: "add-all",
+      command: "git add -A",
+      label: "Stage all"
+    }, assessment);
+
+    expect(evaluation.enforcement).toBe("confirm");
+    expect(evaluation.reason).toContain("scan was truncated");
   });
 
   it("warns task execution in elevated workspaces", async () => {
