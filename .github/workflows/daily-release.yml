@@ -183,35 +183,43 @@ jobs:
           } >> daily-release-notes.md
 
           DEP_STATUS=$(cat dependabot-alerts-status.txt 2>/dev/null || echo "available")
-          DEP_TOTAL=$(jq 'length' dependabot-alerts.json)
-          DEP_HIGH=$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' dependabot-alerts.json)
-          DEP_MEDIUM=$(jq '[.[] | select(.security_advisory.severity == "medium")] | length' dependabot-alerts.json)
-          DEP_LOW=$(jq '[.[] | select(.security_advisory.severity == "low")] | length' dependabot-alerts.json)
-
-          {
-            if [ "${DEP_STATUS}" != "available" ]; then
-              echo "- Status: ${DEP_STATUS}"
-            fi
-            echo "- Open alerts: ${DEP_TOTAL}"
-            echo "- High/Critical: ${DEP_HIGH}"
-            echo "- Medium: ${DEP_MEDIUM}"
-            echo "- Low: ${DEP_LOW}"
-            echo
-          } >> daily-release-notes.md
 
           if [ "${DEP_STATUS}" != "available" ]; then
-            echo "Dependabot alerts were not included in this run." >> daily-release-notes.md
-          elif [ "${DEP_TOTAL}" -eq 0 ]; then
-            echo "No open Dependabot alerts." >> daily-release-notes.md
-          else
             {
-              echo "### Dependabot alerts"
-              jq -r '
-                .[:20]
-                | .[]
-                | "- \(.dependency.package.name): \(.security_advisory.summary) (\(.security_advisory.severity // "unknown"))"
-              ' dependabot-alerts.json
+              echo "- Status: ${DEP_STATUS}"
+              echo "- Open alerts: N/A"
+              echo "- High/Critical: N/A"
+              echo "- Medium: N/A"
+              echo "- Low: N/A"
+              echo
             } >> daily-release-notes.md
+            echo "Dependabot alerts were not included in this run." >> daily-release-notes.md
+          else
+            DEP_TOTAL=$(jq 'length' dependabot-alerts.json)
+            DEP_HIGH=$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' dependabot-alerts.json)
+            DEP_MEDIUM=$(jq '[.[] | select(.security_advisory.severity == "medium")] | length' dependabot-alerts.json)
+            DEP_LOW=$(jq '[.[] | select(.security_advisory.severity == "low")] | length' dependabot-alerts.json)
+
+            {
+              echo "- Open alerts: ${DEP_TOTAL}"
+              echo "- High/Critical: ${DEP_HIGH}"
+              echo "- Medium: ${DEP_MEDIUM}"
+              echo "- Low: ${DEP_LOW}"
+              echo
+            } >> daily-release-notes.md
+
+            if [ "${DEP_TOTAL}" -eq 0 ]; then
+              echo "No open Dependabot alerts." >> daily-release-notes.md
+            else
+              {
+                echo "### Dependabot alerts"
+                jq -r '
+                  .[:20]
+                  | .[]
+                  | "- \(.dependency.package.name): \(.security_advisory.summary) (\(.security_advisory.severity // "unknown"))"
+                ' dependabot-alerts.json
+              } >> daily-release-notes.md
+            fi
           fi
 
           {
