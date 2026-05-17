@@ -6,7 +6,7 @@ on:
       - main
   pull_request:
   schedule:
-    - cron: "17 2 * * *"
+    - cron: "17 2 * * 1"
 
 permissions:
   contents: read
@@ -18,10 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        os: ${{ fromJSON(github.event_name == 'schedule' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
 
     steps:
       - name: Check out repository

@@ -2,7 +2,7 @@ name: Daily Release
 
 on:
   schedule:
-    - cron: "7 3 * * *"
+    - cron: "7 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -77,13 +77,29 @@ jobs:
 
       - name: Collect Dependabot alerts
         env:
-          GH_TOKEN: ${{ github.token }}
+          DEPENDABOT_ALERTS_TOKEN: ${{ secrets.DEPENDABOT_ALERTS_TOKEN }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          gh api \
+          if [ -z "${DEPENDABOT_ALERTS_TOKEN}" ]; then
+            echo "[]" > dependabot-alerts.json
+            echo "unavailable: set DEPENDABOT_ALERTS_TOKEN with Dependabot alerts read access" > dependabot-alerts-status.txt
+            echo "::warning::Skipping Dependabot alert collection because DEPENDABOT_ALERTS_TOKEN is not configured. GITHUB_TOKEN cannot read Dependabot alerts."
+            exit 0
+          fi
+
+          export GH_TOKEN="${DEPENDABOT_ALERTS_TOKEN}"
+
+          if gh api \
             --paginate \
             -H "Accept: application/vnd.github+json" \
-            "/repos/${REPOSITORY}/dependabot/alerts?state=open&per_page=100" > dependabot-alerts.json
+            "/repos/${REPOSITORY}/dependabot/alerts?state=open&per_page=100" > dependabot-alerts.tmp.json; then
+            mv dependabot-alerts.tmp.json dependabot-alerts.json
+            echo "available" > dependabot-alerts-status.txt
+          else
+            echo "[]" > dependabot-alerts.json
+            echo "unavailable: Dependabot alerts API request failed; check DEPENDABOT_ALERTS_TOKEN permissions" > dependabot-alerts-status.txt
+            echo "::warning::Skipping Dependabot alert collection because the Dependabot alerts API request failed."
+          fi
 
       - name: Collect open pull requests
         env:
@@ -166,30 +182,44 @@ jobs:
             echo "## Dependabot"
           } >> daily-release-notes.md
 
-          DEP_TOTAL=$(jq 'length' dependabot-alerts.json)
-          DEP_HIGH=$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' dependabot-alerts.json)
-          DEP_MEDIUM=$(jq '[.[] | select(.security_advisory.severity == "medium")] | length' dependabot-alerts.json)
-          DEP_LOW=$(jq '[.[] | select(.security_advisory.severity == "low")] | length' dependabot-alerts.json)
+          DEP_STATUS=$(cat dependabot-alerts-status.txt 2>/dev/null || echo "available")
 
-          {
-            echo "- Open alerts: ${DEP_TOTAL}"
-            echo "- High/Critical: ${DEP_HIGH}"
-            echo "- Medium: ${DEP_MEDIUM}"
-            echo "- Low: ${DEP_LOW}"
-            echo
-          } >> daily-release-notes.md
-
-          if [ "${DEP_TOTAL}" -eq 0 ]; then
-            echo "No open Dependabot alerts." >> daily-release-notes.md
-          else
+          if [ "${DEP_STATUS}" != "available" ]; then
             {
-              echo "### Dependabot alerts"
-              jq -r '
-                .[:20]
-                | .[]
-                | "- \(.dependency.package.name): \(.security_advisory.summary) (\(.security_advisory.severity // "unknown"))"
-              ' dependabot-alerts.json
+              echo "- Status: ${DEP_STATUS}"
+              echo "- Open alerts: N/A"
+              echo "- High/Critical: N/A"
+              echo "- Medium: N/A"
+              echo "- Low: N/A"
+              echo
             } >> daily-release-notes.md
+            echo "Dependabot alerts were not included in this run." >> daily-release-notes.md
+          else
+            DEP_TOTAL=$(jq 'length' dependabot-alerts.json)
+            DEP_HIGH=$(jq '[.[] | select(.security_advisory.severity == "high" or .security_advisory.severity == "critical")] | length' dependabot-alerts.json)
+            DEP_MEDIUM=$(jq '[.[] | select(.security_advisory.severity == "medium")] | length' dependabot-alerts.json)
+            DEP_LOW=$(jq '[.[] | select(.security_advisory.severity == "low")] | length' dependabot-alerts.json)
+
+            {
+              echo "- Open alerts: ${DEP_TOTAL}"
+              echo "- High/Critical: ${DEP_HIGH}"
+              echo "- Medium: ${DEP_MEDIUM}"
+              echo "- Low: ${DEP_LOW}"
+              echo
+            } >> daily-release-notes.md
+
+            if [ "${DEP_TOTAL}" -eq 0 ]; then
+              echo "No open Dependabot alerts." >> daily-release-notes.md
+            else
+              {
+                echo "### Dependabot alerts"
+                jq -r '
+                  .[:20]
+                  | .[]
+                  | "- \(.dependency.package.name): \(.security_advisory.summary) (\(.security_advisory.severity // "unknown"))"
+                ' dependabot-alerts.json
+              } >> daily-release-notes.md
+            fi
           fi
 
           {
@@ -221,7 +251,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.summary.outputs.tag }}
         run: |
-          gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json dependabot-alerts.json open-prs.json daily-release-notes.md --clobber
+          gh release upload "${TAG}" workspace-guard.vsix codeql-alerts.json dependabot-alerts.json dependabot-alerts-status.txt open-prs.json daily-release-notes.md --clobber
 
       - name: Publish daily pre-release to Marketplace
         env:

@@ -417,8 +417,15 @@ function formatWorkspaceSafetyMessage(assessment: Awaited<ReturnType<ReturnType<
   const parts = [
     `Classification: ${assessment.classification}`,
     `Home folders: ${assessment.homeFolders.length}`,
-    `High-risk folders: ${assessment.highRiskFolders.length}`
+    `High-risk folders: ${assessment.highRiskFolders.length}`,
+    `Secret-bearing files: ${assessment.secretBearingFiles.length}`,
+    `Env template files: ${assessment.envTemplateFiles.length}`
   ];
+
+  if (assessment.envFileScan.truncated) {
+    parts.push(`Env scan incomplete: ${assessment.envFileScan.truncationReasons.join(", ")}`);
+  }
+
   return `Workspace Guard workspace safety assessment. ${parts.join(" | ")}`;
 }
 
