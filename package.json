@@ -359,7 +359,7 @@
     "@types/node": "^25.5.0",
     "@types/vscode": "^1.110.0",
     "@vscode/test-electron": "^2.5.2",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^3.9.1",
     "fast-check": "^4.3.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.4"
